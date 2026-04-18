@@ -267,6 +267,63 @@ export const CodeGraphCanvas = ({
         {/* canvas left intentionally bare — paper texture shows through */}
 
         <g ref={gRef}>
+          {/* Zones (folder backgrounds) */}
+          {showZones && (
+            <g pointerEvents="none">
+              {zoneList.map((z) => {
+                const pts = z.members.filter(
+                  (m) => m.x != null && m.y != null,
+                );
+                if (pts.length === 0) return null;
+                const PAD = 28;
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                for (const p of pts) {
+                  const r = (NODE_RADIUS[p.type] ?? 4) + 2;
+                  if ((p.x! - r) < minX) minX = p.x! - r;
+                  if ((p.y! - r) < minY) minY = p.y! - r;
+                  if ((p.x! + r) > maxX) maxX = p.x! + r;
+                  if ((p.y! + r) > maxY) maxY = p.y! + r;
+                }
+                const x = minX - PAD;
+                const y = minY - PAD;
+                const w = maxX - minX + PAD * 2;
+                const h = maxY - minY + PAD * 2;
+                const zoneDim =
+                  highlight &&
+                  !z.members.some((m) => highlight.has(m.id));
+                const fill = `hsl(${z.hue} 38% 92% / ${zoneDim ? 0.2 : 0.55})`;
+                const stroke = `hsl(${z.hue} 30% 65% / ${zoneDim ? 0.15 : 0.45})`;
+                return (
+                  <g key={z.key} style={{ transition: "opacity 200ms" }}>
+                    <rect
+                      x={x}
+                      y={y}
+                      width={w}
+                      height={h}
+                      rx={20}
+                      ry={20}
+                      fill={fill}
+                      stroke={stroke}
+                      strokeWidth={1}
+                      strokeDasharray="3 4"
+                    />
+                    <text
+                      x={x + 10}
+                      y={y + 14}
+                      fontSize={9}
+                      fontFamily="var(--font-mono)"
+                      fill={`hsl(${z.hue} 30% 40%)`}
+                      opacity={zoneDim ? 0.4 : 0.85}
+                      style={{ textTransform: "uppercase", letterSpacing: "0.08em" }}
+                    >
+                      {z.key}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          )}
+
           {/* Edges */}
           <g>
             {links.map((l, i) => {
