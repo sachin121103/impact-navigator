@@ -5,16 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CodeGraphCanvas } from "@/components/CodeGraphCanvas";
 import { SAMPLE_GRAPH, type GraphPayload } from "@/lib/sample-graph";
+import { supabase } from "@/integrations/supabase/client";
 
 const CodeGraph = () => {
   const [data, setData] = useState<GraphPayload>(SAMPLE_GRAPH);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [repoInput, setRepoInput] = useState("");
-  const [backend, setBackend] = useState(
-    () => localStorage.getItem("meridian.backend") ?? "http://localhost:8000",
-  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [meta, setMeta] = useState<{ owner: string; name: string; branch: string; file_count: number } | null>(null);
 
   const stats = useMemo(() => {
     const files = data.nodes.filter((n) => n.type === "file").length;
@@ -50,12 +49,20 @@ const CodeGraph = () => {
     setLoading(true);
     setError(null);
     try {
-      localStorage.setItem("meridian.backend", backend);
-      const url = `${backend.replace(/\/$/, "")}/graph/meta?repo=${encodeURIComponent(repoInput)}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-      const json = (await res.json()) as GraphPayload;
-      setData(json);
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/graph-meta?repo=${encodeURIComponent(repoInput)}`;
+      const r = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+      });
+      const json = (await r.json()) as GraphPayload & {
+        _meta?: { owner: string; name: string; branch: string; file_count: number };
+        error?: string;
+      };
+      if (!r.ok || json.error) throw new Error(json.error ?? `${r.status}`);
+      setData({ nodes: json.nodes, edges: json.edges });
+      setMeta(json._meta ?? null);
       setSelectedId(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
@@ -94,7 +101,7 @@ const CodeGraph = () => {
             <Input
               value={repoInput}
               onChange={(e) => setRepoInput(e.target.value)}
-              placeholder="github.com/psf/requests  or  /local/path/to/repo"
+              placeholder="github.com/owner/repo  or  owner/repo"
               className="h-9 w-[360px] font-mono text-xs"
               onKeyDown={(e) => e.key === "Enter" && loadRepo()}
             />
@@ -106,18 +113,18 @@ const CodeGraph = () => {
               )}
             </Button>
           </div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground md:ml-auto">
-            <span className="font-mono">backend:</span>
-            <Input
-              value={backend}
-              onChange={(e) => setBackend(e.target.value)}
-              className="h-8 w-[220px] font-mono text-xs"
-            />
+          <div className="flex items-center gap-3 text-xs text-muted-foreground md:ml-auto">
+            {meta && (
+              <span className="font-mono">
+                {meta.owner}/{meta.name} · {meta.branch} · {meta.file_count} files
+              </span>
+            )}
             <Button
               size="sm"
               variant="outline"
               onClick={() => {
                 setData(SAMPLE_GRAPH);
+                setMeta(null);
                 setSelectedId(null);
                 setError(null);
               }}
