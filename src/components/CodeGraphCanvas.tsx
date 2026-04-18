@@ -221,9 +221,11 @@ export const CodeGraphCanvas = ({
                   x2={t.x}
                   y2={t.y}
                   stroke={EDGE_STROKE[l.type]}
-                  strokeWidth={l.type === "imports" ? 1 : 0.6}
+                  strokeWidth={
+                    l.type === "imports" ? 1 : l.type === "contains" ? 0.5 : 0.6
+                  }
                   strokeDasharray={l.type === "calls" ? "2 3" : undefined}
-                  opacity={dim ? 0.05 : 1}
+                  opacity={dim ? 0.05 : l.type === "contains" ? 0.55 : 1}
                   style={{ transition: "opacity 200ms" }}
                 />
               );
