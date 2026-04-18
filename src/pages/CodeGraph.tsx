@@ -610,7 +610,7 @@ const CodeGraph = () => {
                 <NodeMetricRow
                   label="PageRank"
                   value={(metrics.pagerank.get(selected.id) ?? 0).toFixed(4)}
-                  tag={`top ${Math.round((1 - percentileRank(metrics.pagerank, selected.id)) * 100)}%`}
+                  tag={`top ${Math.round((1 - (metrics.pagerankPercentile.get(selected.id) ?? 0)) * 100)}%`}
                   tagColor={T.accent}
                 />
                 <NodeMetricRow
