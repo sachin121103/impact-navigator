@@ -1,52 +1,50 @@
 
 
 ## Goal
-Make the Code Graph easier to read by reducing label overlap and visual noise — without redesigning the layout. Focus on **labels**, **density**, and **focus mode**.
+Make the Code Graph (`/code-graph`) work for JavaScript/TypeScript repos (like `sachin121103/impact-navigator`), which currently return 0 nodes because the parser only handles Python/C/C++.
 
-## Why it's cluttered today
-- All file/class labels show by default and sit to the right of every node — neighbouring bubbles overlap their label text.
-- Even with a selection, dimmed nodes/edges still draw text at full size.
-- Zone labels and node labels can collide near zone borders.
-- Default `linkDistance: 80` + `repel: -180` packs nodes tightly at typical zoom.
+## Root cause
+`supabase/functions/graph-meta/index.ts` filters files with:
+```
+KEEP_EXT = {.py, .ipynb, .c, .h, .cpp, .hpp, .cc}
+```
+Any TS/JS-only repo therefore yields `file_count: 0` → empty graph.
 
-## Approach (small, targeted changes — single file)
+## Approach
+Extend `graph-meta` to also parse `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`. Reuse the same node/edge contract (`file`, `function`, `class`, `imports`, `calls`).
 
-### 1. Smarter label visibility (biggest win)
-Instead of "show all labels above zoom X", show labels by **importance + interaction**:
-- **Always show:** selected/hovered node + its direct neighbours (already partly done; extend it).
-- **Show by degree:** only show labels for the top N most-connected nodes per zone (e.g. top 3 files, top 2 classes, top 1 fn) at default zoom. Reveal more as user zooms in.
-- **Hide labels on dimmed nodes** entirely when something is selected/searched (currently they still render).
-- Raise label size threshold for functions to `zoomLevel > 1.8` (was 1.4) — function labels are the densest tier.
+### Changes to `supabase/functions/graph-meta/index.ts`
 
-### 2. Collision-aware label placement
-Cheap trick: after each tick, for each visible label, check if its bounding box overlaps a previously-placed label in the same frame; if so, hide it (or flip to left side). Implementation: maintain an array of placed `{x,y,w,h}` rects per tick, skip rendering text when a collision is detected. No external lib needed; runs only for labels that pass step 1's filter, so it's cheap.
+1. **File filter** — add JS/TS extensions to `KEEP_EXT`. Also skip `.d.ts`, `node_modules`, `dist`, `build`, `.next`, test files (`*.test.*`, `*.spec.*`, `__tests__`).
 
-### 3. Label background pill for readability
-Wrap each visible label in a tiny rounded `<rect>` with the paper background colour at ~85% opacity behind the text. Makes text legible when it crosses an edge or another node.
+2. **JS/TS parser** (`parseJs`) — regex-based, mirroring `parsePy`:
+   - Strip block & line comments and string/template literals before scanning (avoids false matches).
+   - Detect:
+     - `function name(...)` and `async function name(...)`
+     - `class Name { ... }` with method declarations inside
+     - `const name = (...) => { ... }` / `const name = function(...) {}` arrow & expression functions
+     - `import ... from 'x'` / `import 'x'` / dynamic `import('x')` / CommonJS `require('x')`
+   - Track nesting (brace depth) to attribute calls to the innermost containing function — same shape as the Python pass.
 
-### 4. Looser default density
-- Bump `DEFAULT_PHYSICS.linkDistance` from `80` → `110`.
-- Bump `forceCollide` radius padding from `+8` → `+14`.
-- Slightly weaker `centerStrength` (0.06 → 0.04) so zones spread out more.
+3. **Import resolution** — for relative imports (`./foo`, `../bar/baz`), resolve against the importer's directory and try extensions `.ts, .tsx, .js, .jsx, .mjs, .cjs` plus `/index.*`. Emit an `imports` edge if the resolved path matches a known file node. Bare imports (e.g. `react`) are ignored.
 
-This gives labels more room without changing the layout style.
+4. **Call resolution** — same deferred pass as Python: store `[callerId, calleeBareName]`, then resolve via `fnIndex` after all files are parsed.
 
-### 5. Focus mode toggle
-Add a `◉` button to the right-side control stack: when on, the canvas only renders the selected node, its 1-hop neighbours, and the edges between them — everything else fades to ~5% opacity. Effectively a "isolate" mode for tracing one symbol's relationships. Defaults off.
+5. **No schema, no UI changes** — graph response shape stays identical, so `CodeGraphCanvas` renders TS repos with no further edits.
 
-### 6. Hover affordance
-Show a small label even for nodes below the visibility threshold when hovered (already works for selected — extend to hover with a slight fade-in). Already partially done; verify no regression after step 1.
+### Files
+- **edit** `supabase/functions/graph-meta/index.ts` — add JS/TS extensions, parser, import/call resolution.
+- **deploy** `graph-meta` edge function after edit.
 
-### 7. Zone label tweak
-Move zone labels into a small pill at the top-left corner of each rect with the paper-tone background, so they don't blend into node labels nearby.
+### Verification
+After deploy, hit:
+```
+GET /functions/v1/graph-meta?repo=https://github.com/sachin121103/impact-navigator
+```
+Expect `_meta.file_count > 0` and a populated `nodes`/`edges` array, then load `/code-graph` and confirm the visualization renders.
 
-## Files
-- **edit** `src/components/CodeGraphCanvas.tsx` — label filter logic, per-tick collision dedupe, label pills, default physics tweaks, focus-mode toggle + button, zone label pill.
-
-No backend, schema, or other component changes.
-
-## Out of scope (can add later if needed)
-- Full force-directed label layout (e.g. `d3-labeler`) — overkill for now.
-- Edge bundling.
-- Per-zone collapse/expand into a single super-node.
+## Out of scope
+- Type-aware resolution (TS compiler API) — overkill for a regex parser.
+- Bare-import resolution to `node_modules` — irrelevant for an in-repo call graph.
+- Vue/Svelte/Go/Rust — can be added later in the same pattern.
 
