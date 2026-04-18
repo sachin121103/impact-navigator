@@ -74,7 +74,7 @@ const CodeGraph = () => {
   const isEmpty = !hasLoadedRepo;
 
   return (
-    <div className="fixed inset-0 overflow-hidden texture-paper">
+    <div className="relative h-screen w-full overflow-hidden texture-paper">
       {/* Full-bleed canvas */}
       <div className={isEmpty ? "absolute inset-0 opacity-30" : "absolute inset-0"}>
         <CodeGraphCanvas

@@ -23,7 +23,7 @@ export const SubPageShell = ({
   legend?: React.ReactNode;
 }) => {
   return (
-    <div className="fixed inset-0 overflow-hidden texture-paper">
+    <div className="relative h-screen w-full overflow-hidden texture-paper">
       {/* Full-bleed visual */}
       <div className="absolute inset-0 opacity-90">{visual}</div>
 
