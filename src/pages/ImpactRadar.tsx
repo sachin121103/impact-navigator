@@ -42,8 +42,29 @@ type RepoStatus =
   | { state: "checking" }
   | { state: "not-found" }
   | { state: "indexing" }
-  | { state: "ready"; symbolCount: number; edgeCount: number }
+  | { state: "ready"; symbolCount: number; edgeCount: number; language?: string | null }
   | { state: "failed"; message: string };
+
+const parseOwnerRepo = (url: string): { owner: string; repo: string } | null => {
+  const m = url.trim().replace(/\.git$/i, "").replace(/\/+$/, "")
+    .match(/^https?:\/\/github\.com\/([^/\s]+)\/([^/\s]+)$/);
+  return m ? { owner: m[1], repo: m[2] } : null;
+};
+
+const fetchRepoLanguage = async (url: string): Promise<string | null> => {
+  const parts = parseOwnerRepo(url);
+  if (!parts) return null;
+  try {
+    const res = await fetch(`https://api.github.com/repos/${parts.owner}/${parts.repo}`, {
+      headers: { Accept: "application/vnd.github+json" },
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    return (j?.language as string) ?? null;
+  } catch {
+    return null;
+  }
+};
 
 const RISK_CLASS: Record<RiskLevel, string> = {
   high: "text-risk-high",
@@ -84,10 +105,12 @@ const ImpactRadar = () => {
       if (!data) {
         setRepoStatus({ state: "not-found" });
       } else if ((data as any).status === "ready") {
+        const language = await fetchRepoLanguage(repoUrl.trim());
         setRepoStatus({
           state: "ready",
           symbolCount: (data as any).symbol_count,
           edgeCount: (data as any).edge_count,
+          language,
         });
       } else if ((data as any).status === "indexing") {
         setRepoStatus({ state: "indexing" });
@@ -110,10 +133,12 @@ const ImpactRadar = () => {
       });
       if (error) throw new Error(error.message);
       if (!(data as any)?.ok) throw new Error((data as any)?.error ?? "Indexing failed");
+      const language = await fetchRepoLanguage(repoUrl.trim());
       setRepoStatus({
         state: "ready",
         symbolCount: (data as any).symbols ?? 0,
         edgeCount: (data as any).edges ?? 0,
+        language,
       });
     } catch (err) {
       setRepoStatus({ state: "failed", message: (err as Error).message });
@@ -172,6 +197,14 @@ const ImpactRadar = () => {
     <div>
       {/* Step 1 — Repo URL */}
       <div className="mb-4 rounded-lg border border-border bg-card p-4 shadow-paper">
+        {repoStatus.state === "ready" && repoStatus.language && (
+          <div className="mb-2 flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+            <span className="font-mono text-[10px] uppercase tracking-widest text-accent">
+              language · {repoStatus.language}
+            </span>
+          </div>
+        )}
         <div className="mb-2 flex items-center justify-between">
           <label htmlFor="repo-url" className="font-mono text-[11px] uppercase tracking-widest text-accent">
             Step 1 · GitHub repository
