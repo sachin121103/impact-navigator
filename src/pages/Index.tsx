@@ -17,7 +17,7 @@ const Index = () => {
         </Link>
         <nav className="hidden items-center gap-7 text-sm text-muted-foreground md:flex">
           <Link to="/code-graph" className="hover:text-foreground transition-colors">Code Graph</Link>
-          <Link to="/code-star" className="hover:text-foreground transition-colors">Code Star</Link>
+          <Link to="/sentinel-graph" className="hover:text-foreground transition-colors">Sentinel Graph</Link>
           <Link to="/impact-radar" className="hover:text-foreground transition-colors">Impact Radar</Link>
         </nav>
         <Button variant="outline" size="sm">Sign in</Button>
@@ -87,12 +87,12 @@ const Index = () => {
               body="Visualise an entire repository as a navigable graph — folders, files, and the threads between them. Zoom from continent to street."
             />
             <ToolCard
-              to="/code-star"
+              to="/sentinel-graph"
               n="02"
               icon={<Sparkles className="h-5 w-5" />}
-              name="Code Star"
-              tagline="What does it mean?"
-              body="Point at any file or function and get an explanation grounded in the rest of your repo — not generic docs, your code."
+              name="Sentinel Graph"
+              tagline="What will it touch?"
+              body="A live dependency map with dead-code highlighting, ripple impact analysis, and a test orchestrator that runs only the tests your change actually breaks."
             />
             <ToolCard
               to="/impact-radar"
