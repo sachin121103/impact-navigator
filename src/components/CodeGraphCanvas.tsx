@@ -116,6 +116,7 @@ export const CodeGraphCanvas = ({
   const [tickCount, setTickCount] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [showZones, setShowZones] = useState(true);
+  const [focusMode, setFocusMode] = useState(false);
   const [nodeTypeFilters, setNodeTypeFilters] = useState<Set<NodeType>>(
     new Set(["file", "class", "function"]),
   );
