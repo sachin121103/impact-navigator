@@ -1,10 +1,21 @@
 import type { GraphEdge, GraphNode } from "./sample-graph";
 
+export type CycleInfo = {
+  cyclicNodeIds: Set<string>;
+  cycles: string[][];
+};
+
+export type OrphanInfo = {
+  orphanIds: Set<string>;
+};
+
 export type GraphMetrics = {
   pagerank: Map<string, number>;
   betweenness: Map<string, number>;
   clustering: Map<string, number>;
   stats: GraphStats;
+  cycles: CycleInfo;
+  orphans: OrphanInfo;
 };
 
 export type GraphStats = {
@@ -156,11 +167,84 @@ export function computeClusteringCoefficient(
   return cc;
 }
 
+// ─── Cycle Detection (DFS, directed, import edges only) ──────────────────────
+export function detectCycles(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  edgeTypes: Array<GraphEdge["type"]> = ["imports", "include"],
+): CycleInfo {
+  const ids = nodes.map((n) => n.id);
+  const adj = new Map<string, string[]>();
+  for (const id of ids) adj.set(id, []);
+  for (const e of edges) {
+    if (!edgeTypes.includes(e.type)) continue;
+    if (adj.has(e.source) && adj.has(e.target))
+      adj.get(e.source)!.push(e.target);
+  }
+
+  // 0=unvisited, 1=in stack, 2=done
+  const color = new Map<string, 0 | 1 | 2>(ids.map((id) => [id, 0]));
+  const cyclicNodeIds = new Set<string>();
+  const rawCycles: string[][] = [];
+  const path: string[] = [];
+
+  function dfs(v: string) {
+    color.set(v, 1);
+    path.push(v);
+    for (const w of adj.get(v)!) {
+      if (color.get(w) === 1) {
+        const start = path.indexOf(w);
+        rawCycles.push(path.slice(start));
+      } else if (color.get(w) === 0) {
+        dfs(w);
+      }
+    }
+    path.pop();
+    color.set(v, 2);
+  }
+
+  for (const id of ids) if (color.get(id) === 0) dfs(id);
+
+  // Deduplicate: normalise each cycle so smallest id is first
+  const seen = new Set<string>();
+  const cycles: string[][] = [];
+  for (const c of rawCycles) {
+    const minIdx = c.reduce((mi, id, i) => (id < c[mi] ? i : mi), 0);
+    const norm = [...c.slice(minIdx), ...c.slice(0, minIdx)];
+    const key = norm.join("→");
+    if (!seen.has(key)) {
+      seen.add(key);
+      cycles.push(norm);
+      for (const id of norm) cyclicNodeIds.add(id);
+    }
+  }
+
+  return { cyclicNodeIds, cycles };
+}
+
+// ─── Orphan Detection ─────────────────────────────────────────────────────────
+// Orphans have no incoming directed edges (excluding "contains").
+export function detectOrphans(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+): OrphanInfo {
+  const inDegree = new Map<string, number>(nodes.map((n) => [n.id, 0]));
+  for (const e of edges) {
+    if (e.type === "contains") continue;
+    if (inDegree.has(e.target))
+      inDegree.set(e.target, inDegree.get(e.target)! + 1);
+  }
+  const orphanIds = new Set<string>();
+  for (const [id, deg] of inDegree) if (deg === 0) orphanIds.add(id);
+  return { orphanIds };
+}
+
 // ─── Graph Stats (BFS-based) ──────────────────────────────────────────────────
 export function computeGraphStats(
   nodes: GraphNode[],
   edges: GraphEdge[],
   betweenness?: Map<string, number>,
+  cycles?: CycleInfo,
 ): GraphStats {
   const ids = nodes.map((n) => n.id);
   const N = ids.length;
@@ -234,6 +318,7 @@ export function computeGraphStats(
   else if (diameter > 7) score -= 10;
   if (components > 1) score -= 20;
   if (density < 0.05 || density > 0.40) score -= 10;
+  if (cycles) score -= Math.min(30, cycles.cycles.length * 12);
 
   return {
     diameter,
@@ -252,8 +337,10 @@ export function computeAllMetrics(
   const pagerank = computePageRank(nodes, edges);
   const betweenness = computeBetweenness(nodes, edges);
   const clustering = computeClusteringCoefficient(nodes, edges);
-  const stats = computeGraphStats(nodes, edges, betweenness);
-  return { pagerank, betweenness, clustering, stats };
+  const cycles = detectCycles(nodes, edges);
+  const orphans = detectOrphans(nodes, edges);
+  const stats = computeGraphStats(nodes, edges, betweenness, cycles);
+  return { pagerank, betweenness, clustering, stats, cycles, orphans };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

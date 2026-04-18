@@ -350,7 +350,7 @@ const CodeGraph = () => {
           </div>
 
           {/* Most influential */}
-          <div className="px-4 py-3">
+          <div className="px-4 py-3" style={{ borderBottom: metrics.cycles.cycles.length > 0 || metrics.orphans.orphanIds.size > 0 ? `1px solid ${T.border}` : undefined }}>
             <p className="mb-1.5 font-mono text-[9px] uppercase tracking-widest" style={{ color: T.dim }}>
               Most influential (PageRank)
             </p>
@@ -369,6 +369,60 @@ const CodeGraph = () => {
               </button>
             ))}
           </div>
+
+          {/* Circular dependencies */}
+          {metrics.cycles.cycles.length > 0 && (
+            <div className="px-4 py-3" style={{ borderBottom: metrics.orphans.orphanIds.size > 0 ? `1px solid ${T.border}` : undefined }}>
+              <p className="mb-1.5 font-mono text-[9px] uppercase tracking-widest flex items-center gap-1.5" style={{ color: T.red }}>
+                <span>⟳</span> Circular deps · {metrics.cycles.cycles.length}
+              </p>
+              {metrics.cycles.cycles.slice(0, 3).map((cycle, i) => (
+                <div key={i} className="py-0.5 font-mono text-[10px] flex flex-wrap items-center gap-0.5">
+                  {cycle.map((id, j) => (
+                    <span key={id} className="flex items-center gap-0.5">
+                      <button
+                        onClick={() => setSelectedId(id)}
+                        className="hover:underline"
+                        style={{ color: T.red }}
+                      >
+                        {id.split("/").pop()}
+                      </button>
+                      {j < cycle.length - 1 && (
+                        <span style={{ color: T.dim }}>→</span>
+                      )}
+                    </span>
+                  ))}
+                  <span style={{ color: T.red }}>↺</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Orphan nodes */}
+          {metrics.orphans.orphanIds.size > 0 && (
+            <div className="px-4 py-3">
+              <p className="mb-1.5 font-mono text-[9px] uppercase tracking-widest flex items-center gap-1.5" style={{ color: T.muted }}>
+                <span>○</span> Unreachable · {metrics.orphans.orphanIds.size}
+              </p>
+              {[...metrics.orphans.orphanIds].slice(0, 4).map((id) => (
+                <button
+                  key={id}
+                  onClick={() => setSelectedId(id)}
+                  className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-secondary"
+                >
+                  <span className="font-mono text-[10px]" style={{ color: T.dim }}>○</span>
+                  <span className="truncate font-mono text-[10px]" style={{ color: T.muted }}>
+                    {id.split("/").pop()}
+                  </span>
+                </button>
+              ))}
+              {metrics.orphans.orphanIds.size > 4 && (
+                <p className="px-1.5 pt-1 font-mono text-[9px]" style={{ color: T.dim }}>
+                  +{metrics.orphans.orphanIds.size - 4} more
+                </p>
+              )}
+            </div>
+          )}
         </aside>
       )}
 
@@ -468,6 +522,26 @@ const CodeGraph = () => {
                   <GitCommit className="h-3 w-3" />
                   last commit · {selected.last_commit ?? "—"}
                 </div>
+              </div>
+            )}
+
+            {/* Structural anomalies for selected node */}
+            {(metrics.cycles.cyclicNodeIds.has(selected.id) || metrics.orphans.orphanIds.has(selected.id)) && (
+              <div className="mb-4 rounded-xl border p-3"
+                style={{ borderColor: metrics.cycles.cyclicNodeIds.has(selected.id) ? `${T.red}50` : T.border,
+                  background: metrics.cycles.cyclicNodeIds.has(selected.id) ? `${T.red}08` : "rgba(160,138,110,0.06)" }}>
+                {metrics.cycles.cyclicNodeIds.has(selected.id) && (
+                  <div className="flex items-center gap-2 font-mono text-[10px]" style={{ color: T.red }}>
+                    <span>⟳</span>
+                    <span>Part of a circular dependency</span>
+                  </div>
+                )}
+                {metrics.orphans.orphanIds.has(selected.id) && (
+                  <div className="flex items-center gap-2 font-mono text-[10px]" style={{ color: T.muted }}>
+                    <span>○</span>
+                    <span>No incoming references — possible dead code</span>
+                  </div>
+                )}
               </div>
             )}
 

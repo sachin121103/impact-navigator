@@ -596,6 +596,9 @@ export const CodeGraphCanvas = ({
               const btScore = analysisMode === "betweenness" && metrics
                 ? (metrics.betweenness.get(n.id) ?? 0) : 0;
               const isBtWarn = btScore > 0.5;
+              // Structural anomalies — always visible regardless of mode
+              const isCyclic = metrics?.cycles.cyclicNodeIds.has(n.id) ?? false;
+              const isOrphan = metrics?.orphans.orphanIds.has(n.id) ?? false;
 
               return (
                 <g
@@ -669,6 +672,28 @@ export const CodeGraphCanvas = ({
                       strokeWidth={1}
                       opacity={0.3}
                       style={{ animation: "radar-pulse 2.8s ease-out infinite" }}
+                    />
+                  )}
+                  {/* Cycle ring — red dashed, always visible */}
+                  {isCyclic && !isActive && (
+                    <circle
+                      r={r + 6}
+                      fill="none"
+                      stroke="hsl(6,72%,50%)"
+                      strokeWidth={1.2}
+                      strokeDasharray="3 2"
+                      opacity={0.65}
+                    />
+                  )}
+                  {/* Orphan ring — grey dotted, always visible */}
+                  {isOrphan && !isCyclic && !isActive && (
+                    <circle
+                      r={r + 4}
+                      fill="none"
+                      stroke="hsl(25,10%,62%)"
+                      strokeWidth={1}
+                      strokeDasharray="2 2"
+                      opacity={0.5}
                     />
                   )}
                   {/* Node */}
