@@ -123,42 +123,71 @@ Deno.serve(async (req) => {
     }
   }
 
-  // 2. Resolve target symbol — try the full query, then each identifier-like
-  //    token in it (so "Delete update_game" still matches `update_game`).
+  // 2. Resolve target symbol — support plain-English prompts and file/module
+  //    queries like "Delete collision.c" by extracting identifier-like tokens,
+  //    file names, and stripped basenames.
+  const baseCandidates = [query, ...(query.match(/[A-Za-z_][\w./-]*/g) ?? [])]
+    .map((s) => s.trim())
+    .filter((s) => s.length > 1);
+
+  const fileCandidates = Array.from(
+    new Set(
+      baseCandidates
+        .map((s) => s.replace(/^.*[\\/]/, ""))
+        .filter((s) => /\.(py|c|h|cpp|cc|cxx|hpp|hh|hxx)$/i.test(s)),
+    ),
+  );
+
   const candidates = Array.from(
     new Set(
-      [query, ...(query.match(/[A-Za-z_][\w.]*/g) ?? [])]
+      [...baseCandidates, ...fileCandidates.map((s) => s.replace(/\.(py|c|h|cpp|cc|cxx|hpp|hh|hxx)$/i, ""))]
         .map((s) => s.trim())
         .filter((s) => s.length > 1),
     ),
   );
 
   let target: any = null;
-  for (const cand of candidates) {
-    const { data: exact } = await supabase
+
+  for (const fileCand of fileCandidates) {
+    const { data: byFile } = await supabase
       .from("symbols")
       .select("id,name,qualified_name,kind,file_path,line_number,fan_in,fan_out,churn")
       .eq("repo_id", repo.id)
-      .or(`name.eq.${cand},qualified_name.eq.${cand}`)
-      .order("fan_in", { ascending: false })
+      .eq("kind", "module")
+      .ilike("file_path", `%/${fileCand}`)
       .limit(1);
-    if (exact?.length) { target = exact[0]; break; }
+    if (byFile?.length) { target = byFile[0]; break; }
   }
+
+  if (!target) {
+    for (const cand of candidates) {
+      const { data: exact } = await supabase
+        .from("symbols")
+        .select("id,name,qualified_name,kind,file_path,line_number,fan_in,fan_out,churn")
+        .eq("repo_id", repo.id)
+        .or(`name.eq.${cand},qualified_name.eq.${cand}`)
+        .order("fan_in", { ascending: false })
+        .limit(1);
+      if (exact?.length) { target = exact[0]; break; }
+    }
+  }
+
   if (!target) {
     for (const cand of candidates) {
       const { data: fuzzy } = await supabase
         .from("symbols")
         .select("id,name,qualified_name,kind,file_path,line_number,fan_in,fan_out,churn")
         .eq("repo_id", repo.id)
-        .or(`name.ilike.%${cand}%,qualified_name.ilike.%${cand}%`)
+        .or(`name.ilike.%${cand}%,qualified_name.ilike.%${cand}%,file_path.ilike.%${cand}%`)
         .order("fan_in", { ascending: false })
         .limit(1);
       if (fuzzy?.length) { target = fuzzy[0]; break; }
     }
   }
+
   if (!target) {
     return json({
-      error: `No symbol matching "${query}" found in this repo. Try a function name or qualified symbol from the indexed source files.`,
+      error: `No symbol matching "${query}" found in this repo. Try a function name, file name, or qualified symbol from the indexed source files.`,
     }, 404);
   }
 
