@@ -285,7 +285,10 @@ const ImpactRadar = () => {
 };
 
 const RepoStatusBadge = ({ status }: { status: RepoStatus }) => {
-  if (status.state === "empty" || status.state === "invalid") return null;
+  if (status.state === "empty") return null;
+  if (status.state === "invalid") {
+    return <span className="font-mono text-xs text-risk-high">● invalid URL</span>;
+  }
   if (status.state === "checking") {
     return (
       <span className="flex items-center gap-1 font-mono text-xs text-muted-foreground">
