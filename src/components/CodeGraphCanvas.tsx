@@ -600,6 +600,9 @@ export const CodeGraphCanvas = ({
               const s = l.source as SimNode;
               const t = l.target as SimNode;
               const isContains = l.type === "contains";
+              // Skip "contains" edges entirely on very large graphs — they add the
+              // most DOM with the least signal.
+              if (isContains && nodes.length > 1000) return null;
               const lit = finalHighlight
                 ? finalHighlight.has(s.id) && finalHighlight.has(t.id)
                 : true;
@@ -612,6 +615,7 @@ export const CodeGraphCanvas = ({
                 : lit
                   ? (finalHighlight ? Math.min(0.9, base * 1.6) : base)
                   : (finalHighlight ? 0.04 : base * 0.5);
+              const useEdgeFilter = lit && !isContains && links.length <= HEAVY_EDGE_COUNT;
               return (
                 <line
                   key={i}
@@ -625,7 +629,7 @@ export const CodeGraphCanvas = ({
                   strokeDasharray={l.type === "calls" ? "4 3" : undefined}
                   opacity={opacity}
                   markerEnd={!isContains ? `url(#arrow-${l.type})` : undefined}
-                  filter={lit && !isContains ? "url(#edge-highlight)" : undefined}
+                  filter={useEdgeFilter ? "url(#edge-highlight)" : undefined}
                   style={{ transition: "opacity 150ms" }}
                 />
               );
