@@ -16,7 +16,7 @@ interface Props {
   loading?: boolean;
 }
 
-export const ImpactInput = ({ value, onChange, onSubmit, loading }: Props) => {
+export const ImpactInput = ({ value = "", onChange, onSubmit, loading }: Props) => {
   const [promptIdx, setPromptIdx] = useState(0);
 
   useEffect(() => {
@@ -27,7 +27,7 @@ export const ImpactInput = ({ value, onChange, onSubmit, loading }: Props) => {
 
   const handle = (e: FormEvent) => {
     e.preventDefault();
-    if (!loading && value.trim()) onSubmit();
+    if (!loading && (value ?? "").trim()) onSubmit();
   };
 
   return (
@@ -54,7 +54,7 @@ export const ImpactInput = ({ value, onChange, onSubmit, loading }: Props) => {
           </div>
         )}
       </div>
-      <Button type="submit" variant="radar" size="sm" disabled={loading || !value.trim()} className="shrink-0">
+      <Button type="submit" variant="radar" size="sm" disabled={loading || !(value ?? "").trim()} className="shrink-0">
         {loading ? (
           <>
             <Loader2 className="mr-1 h-4 w-4 animate-spin" />
