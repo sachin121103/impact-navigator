@@ -105,10 +105,12 @@ const ImpactRadar = () => {
       if (!data) {
         setRepoStatus({ state: "not-found" });
       } else if ((data as any).status === "ready") {
+        const language = await fetchRepoLanguage(repoUrl.trim());
         setRepoStatus({
           state: "ready",
           symbolCount: (data as any).symbol_count,
           edgeCount: (data as any).edge_count,
+          language,
         });
       } else if ((data as any).status === "indexing") {
         setRepoStatus({ state: "indexing" });
