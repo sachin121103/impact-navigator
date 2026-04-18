@@ -491,11 +491,13 @@ Deno.serve(async (req) => {
 
     const { nodes, edges } = buildGraph(files);
 
-    // Best-effort enrichment; never block the response on rate-limits
-    try {
-      await enrichWithGitMeta(owner, name, nodes);
-    } catch (e) {
-      console.warn("git meta failed", e);
+    // Best-effort enrichment; skip on big repos to avoid CPU limit
+    if (files.length <= 250) {
+      try {
+        await enrichWithGitMeta(owner, name, nodes);
+      } catch (e) {
+        console.warn("git meta failed", e);
+      }
     }
 
     return new Response(
