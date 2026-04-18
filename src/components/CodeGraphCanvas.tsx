@@ -153,11 +153,14 @@ export const CodeGraphCanvas = ({
   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const nodeRefs = useRef<Map<string, SVGGElement>>(new Map());
   const linkRefs = useRef<Map<string, SVGLineElement>>(new Map());
+  const zoneRectRefs = useRef<Map<string, SVGRectElement>>(new Map());
+  const zoneLabelRefs = useRef<Map<string, SVGGElement>>(new Map());
 
   const [size, setSize] = useState({ w: 800, h: 640 });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [zoomLevel, setZoomLevel] = useState(1);
-  const [tickCount, setTickCount] = useState(0);
+  // Bumped only on simulation settle / data change — NOT every tick.
+  const [layoutVersion, setLayoutVersion] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [showZones, setShowZones] = useState(true);
   const [focusMode, setFocusMode] = useState(false);
@@ -168,6 +171,11 @@ export const CodeGraphCanvas = ({
     new Set(["imports", "calls", "include", "contains"]),
   );
   const [physics, setPhysics] = useState<PhysicsConfig>(DEFAULT_PHYSICS);
+
+  // Scale-based perf gating
+  const HEAVY_NODE_COUNT = 400;
+  const VERY_HEAVY_NODE_COUNT = 1500;
+  const HEAVY_EDGE_COUNT = 800;
 
   const { nodes, links, neighborMap, zoneList, zoneByNodeId } = useMemo(() => {
     const visibleNodes = data.nodes.filter((n) => nodeTypeFilters.has(n.type));
