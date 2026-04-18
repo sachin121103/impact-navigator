@@ -212,7 +212,7 @@ export const CodeGraphCanvas = ({
           ),
       )
       .force("charge", forceManyBody().strength(physics.repel))
-      .force("collide", forceCollide<SimNode>().radius((d) => nodeR(d) + 8))
+      .force("collide", forceCollide<SimNode>().radius((d) => nodeR(d) + 14))
       .force(
         "x",
         forceX<SimNode>((d) => {
