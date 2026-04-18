@@ -14,7 +14,210 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      edges: {
+        Row: {
+          created_at: string
+          id: string
+          kind: string
+          repo_id: string
+          source_id: string
+          target_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          kind?: string
+          repo_id: string
+          source_id: string
+          target_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          kind?: string
+          repo_id?: string
+          source_id?: string
+          target_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "edges_repo_id_fkey"
+            columns: ["repo_id"]
+            isOneToOne: false
+            referencedRelation: "repos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "edges_source_id_fkey"
+            columns: ["source_id"]
+            isOneToOne: false
+            referencedRelation: "symbols"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "edges_target_id_fkey"
+            columns: ["target_id"]
+            isOneToOne: false
+            referencedRelation: "symbols"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      impact_runs: {
+        Row: {
+          affected: Json
+          change_kind: string | null
+          created_at: string
+          duration_ms: number | null
+          id: string
+          prompt: string
+          repo_id: string
+          resolved_symbol_id: string | null
+          summary: Json
+        }
+        Insert: {
+          affected?: Json
+          change_kind?: string | null
+          created_at?: string
+          duration_ms?: number | null
+          id?: string
+          prompt: string
+          repo_id: string
+          resolved_symbol_id?: string | null
+          summary?: Json
+        }
+        Update: {
+          affected?: Json
+          change_kind?: string | null
+          created_at?: string
+          duration_ms?: number | null
+          id?: string
+          prompt?: string
+          repo_id?: string
+          resolved_symbol_id?: string | null
+          summary?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "impact_runs_repo_id_fkey"
+            columns: ["repo_id"]
+            isOneToOne: false
+            referencedRelation: "repos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "impact_runs_resolved_symbol_id_fkey"
+            columns: ["resolved_symbol_id"]
+            isOneToOne: false
+            referencedRelation: "symbols"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      repos: {
+        Row: {
+          commit_sha: string | null
+          created_at: string
+          default_branch: string
+          edge_count: number
+          file_count: number
+          id: string
+          indexed_at: string | null
+          name: string
+          owner: string
+          status: string
+          status_message: string | null
+          symbol_count: number
+          updated_at: string
+          url: string
+        }
+        Insert: {
+          commit_sha?: string | null
+          created_at?: string
+          default_branch?: string
+          edge_count?: number
+          file_count?: number
+          id?: string
+          indexed_at?: string | null
+          name: string
+          owner: string
+          status?: string
+          status_message?: string | null
+          symbol_count?: number
+          updated_at?: string
+          url: string
+        }
+        Update: {
+          commit_sha?: string | null
+          created_at?: string
+          default_branch?: string
+          edge_count?: number
+          file_count?: number
+          id?: string
+          indexed_at?: string | null
+          name?: string
+          owner?: string
+          status?: string
+          status_message?: string | null
+          symbol_count?: number
+          updated_at?: string
+          url?: string
+        }
+        Relationships: []
+      }
+      symbols: {
+        Row: {
+          churn: number
+          created_at: string
+          docstring: string | null
+          fan_in: number
+          fan_out: number
+          file_path: string
+          id: string
+          kind: string
+          line_number: number
+          name: string
+          qualified_name: string
+          repo_id: string
+        }
+        Insert: {
+          churn?: number
+          created_at?: string
+          docstring?: string | null
+          fan_in?: number
+          fan_out?: number
+          file_path: string
+          id?: string
+          kind: string
+          line_number?: number
+          name: string
+          qualified_name: string
+          repo_id: string
+        }
+        Update: {
+          churn?: number
+          created_at?: string
+          docstring?: string | null
+          fan_in?: number
+          fan_out?: number
+          file_path?: string
+          id?: string
+          kind?: string
+          line_number?: number
+          name?: string
+          qualified_name?: string
+          repo_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "symbols_repo_id_fkey"
+            columns: ["repo_id"]
+            isOneToOne: false
+            referencedRelation: "repos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
