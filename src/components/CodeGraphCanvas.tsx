@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  forceCenter,
   forceCollide,
   forceLink,
   forceManyBody,
@@ -27,6 +26,21 @@ type SimLink = {
   source: SimNode | string;
   target: SimNode | string;
   type: GraphEdge["type"] | "contains";
+};
+
+// Derive a stable zone key from a file path: first 2 segments.
+const zoneKeyForFile = (file: string): string => {
+  if (!file) return "root";
+  const parts = file.split("/").filter(Boolean);
+  if (parts.length <= 1) return "root";
+  return parts.slice(0, Math.min(2, parts.length - 1)).join("/");
+};
+
+// Stable hash → hue
+const hashHue = (s: string): number => {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return ((h % 360) + 360) % 360;
 };
 
 const NODE_RADIUS = {
@@ -63,9 +77,10 @@ export const CodeGraphCanvas = ({
   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const [size, setSize] = useState({ w: 800, h: 640 });
   const [, force] = useState(0);
+  const [showZones, setShowZones] = useState(true);
 
   // Compute degree per node (drives node size emphasis)
-  const { nodes, links, neighborMap } = useMemo(() => {
+  const { nodes, links, neighborMap, zoneList, zoneByNodeId } = useMemo(() => {
     const nodes: SimNode[] = data.nodes.map((n) => ({ ...n, degree: 0 }));
     const idx = new Map(nodes.map((n) => [n.id, n]));
     const links: SimLink[] = [];
@@ -96,7 +111,23 @@ export const CodeGraphCanvas = ({
       neighborMap.get(s.id)!.add(t.id);
       neighborMap.get(t.id)!.add(s.id);
     }
-    return { nodes, links, neighborMap };
+
+    // Compute zones (folder groupings) from file paths
+    const zoneMembers = new Map<string, SimNode[]>();
+    for (const n of nodes) {
+      const key = zoneKeyForFile(n.file);
+      if (!zoneMembers.has(key)) zoneMembers.set(key, []);
+      zoneMembers.get(key)!.push(n);
+    }
+    const zoneList = Array.from(zoneMembers.entries())
+      .map(([key, members]) => ({ key, members, hue: hashHue(key) }))
+      .sort((a, b) => b.members.length - a.members.length);
+    const zoneByNodeId = new Map<string, string>();
+    for (const z of zoneList) {
+      for (const m of z.members) zoneByNodeId.set(m.id, z.key);
+    }
+
+    return { nodes, links, neighborMap, zoneList, zoneByNodeId };
   }, [data]);
 
   // Resize observer
@@ -110,6 +141,26 @@ export const CodeGraphCanvas = ({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // Compute zone centroid anchors (grid layout) based on size + zone count
+  const zoneAnchors = useMemo(() => {
+    const anchors = new Map<string, { cx: number; cy: number }>();
+    const n = zoneList.length;
+    if (n === 0) return anchors;
+    const cols = Math.ceil(Math.sqrt(n * (size.w / size.h)));
+    const rows = Math.ceil(n / cols);
+    const cellW = size.w / cols;
+    const cellH = size.h / rows;
+    zoneList.forEach((z, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      anchors.set(z.key, {
+        cx: cellW * (col + 0.5),
+        cy: cellH * (row + 0.5),
+      });
+    });
+    return anchors;
+  }, [zoneList, size.w, size.h]);
 
   // Build & run simulation
   useEffect(() => {
@@ -136,9 +187,20 @@ export const CodeGraphCanvas = ({
           (d) => (NODE_RADIUS[d.type] ?? 4) + 4,
         ),
       )
-      .force("x", forceX(size.w / 2).strength(0.04))
-      .force("y", forceY(size.h / 2).strength(0.04))
-      .force("center", forceCenter(size.w / 2, size.h / 2))
+      .force(
+        "x",
+        forceX<SimNode>((d) => {
+          const k = zoneByNodeId.get(d.id);
+          return (k && zoneAnchors.get(k)?.cx) ?? size.w / 2;
+        }).strength(0.18),
+      )
+      .force(
+        "y",
+        forceY<SimNode>((d) => {
+          const k = zoneByNodeId.get(d.id);
+          return (k && zoneAnchors.get(k)?.cy) ?? size.h / 2;
+        }).strength(0.18),
+      )
       .alpha(1)
       .alphaDecay(0.035);
 
@@ -148,7 +210,7 @@ export const CodeGraphCanvas = ({
       sim.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, links, size.w, size.h]);
+  }, [nodes, links, size.w, size.h, zoneAnchors, zoneByNodeId]);
 
   // Zoom & pan
   useEffect(() => {
@@ -205,6 +267,63 @@ export const CodeGraphCanvas = ({
         {/* canvas left intentionally bare — paper texture shows through */}
 
         <g ref={gRef}>
+          {/* Zones (folder backgrounds) */}
+          {showZones && (
+            <g pointerEvents="none">
+              {zoneList.map((z) => {
+                const pts = z.members.filter(
+                  (m) => m.x != null && m.y != null,
+                );
+                if (pts.length === 0) return null;
+                const PAD = 28;
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                for (const p of pts) {
+                  const r = (NODE_RADIUS[p.type] ?? 4) + 2;
+                  if ((p.x! - r) < minX) minX = p.x! - r;
+                  if ((p.y! - r) < minY) minY = p.y! - r;
+                  if ((p.x! + r) > maxX) maxX = p.x! + r;
+                  if ((p.y! + r) > maxY) maxY = p.y! + r;
+                }
+                const x = minX - PAD;
+                const y = minY - PAD;
+                const w = maxX - minX + PAD * 2;
+                const h = maxY - minY + PAD * 2;
+                const zoneDim =
+                  highlight &&
+                  !z.members.some((m) => highlight.has(m.id));
+                const fill = `hsl(${z.hue} 38% 92% / ${zoneDim ? 0.2 : 0.55})`;
+                const stroke = `hsl(${z.hue} 30% 65% / ${zoneDim ? 0.15 : 0.45})`;
+                return (
+                  <g key={z.key} style={{ transition: "opacity 200ms" }}>
+                    <rect
+                      x={x}
+                      y={y}
+                      width={w}
+                      height={h}
+                      rx={20}
+                      ry={20}
+                      fill={fill}
+                      stroke={stroke}
+                      strokeWidth={1}
+                      strokeDasharray="3 4"
+                    />
+                    <text
+                      x={x + 10}
+                      y={y + 14}
+                      fontSize={9}
+                      fontFamily="var(--font-mono)"
+                      fill={`hsl(${z.hue} 30% 40%)`}
+                      opacity={zoneDim ? 0.4 : 0.85}
+                      style={{ textTransform: "uppercase", letterSpacing: "0.08em" }}
+                    >
+                      {z.key}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          )}
+
           {/* Edges */}
           <g>
             {links.map((l, i) => {
@@ -351,6 +470,12 @@ export const CodeGraphCanvas = ({
           onClick={resetZoom}
           aria-label="Reset"
         >⤧</button>
+        <button
+          className={`h-7 w-7 rounded font-mono text-[11px] hover:bg-secondary ${showZones ? "bg-secondary" : ""}`}
+          onClick={() => setShowZones((v) => !v)}
+          aria-label="Toggle zones"
+          title="Toggle folder zones"
+        >▦</button>
       </div>
 
       {/* Legend */}
@@ -361,6 +486,19 @@ export const CodeGraphCanvas = ({
         <span className="mx-1 h-3 w-px bg-border" />
         <LegendLine solid label="imports" />
         <LegendLine solid={false} label="calls" />
+        {showZones && zoneList.length > 0 && (
+          <>
+            <span className="mx-1 h-3 w-px bg-border" />
+            <span className="opacity-70">zones</span>
+            {zoneList.slice(0, 3).map((z) => (
+              <LegendDot
+                key={z.key}
+                color={`hsl(${z.hue} 38% 78%)`}
+                label={z.key}
+              />
+            ))}
+          </>
+        )}
       </div>
     </div>
   );
