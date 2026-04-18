@@ -281,8 +281,166 @@ function extractCSymbolsAndCalls(filePath: string, source: string): {
   return { symbols, edges };
 }
 
+function moduleFromJsPath(path: string): string {
+  const parts = path.split("/").slice(1);
+  return parts.join("/").replace(/\.(ts|tsx|js|jsx|mjs|cjs)$/i, "");
+}
+
+/**
+ * JS/TS extractor — strips comments + strings, then captures function decls,
+ * arrow functions, class declarations + methods, and call sites. Records
+ * `import` statements as import edges from the module scope.
+ */
+function extractJsSymbolsAndCalls(filePath: string, source: string): {
+  symbols: Symbol[];
+  edges: Edge[];
+} {
+  const moduleName = moduleFromJsPath(filePath);
+  const symbols: Symbol[] = [];
+  const edges: Edge[] = [];
+
+  symbols.push({
+    qualified_name: moduleName,
+    name: moduleName.split("/").pop() || moduleName,
+    kind: "module",
+    file_path: filePath,
+    line_number: 1,
+    docstring: null,
+  });
+
+  // Strip comments + string/template literals (preserve newlines for line nums)
+  const cleaned = source
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length))
+    .replace(/`(?:\\.|[^`\\])*`/g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/"(?:\\.|[^"\\\n])*"/g, (m) => " ".repeat(m.length))
+    .replace(/'(?:\\.|[^'\\\n])*'/g, (m) => " ".repeat(m.length));
+
+  // import ... from "x"  /  import "x"
+  const importRe = /^[ \t]*import\s+(?:[\s\S]*?\s+from\s+)?["']([^"']+)["']/gm;
+  let im: RegExpExecArray | null;
+  while ((im = importRe.exec(cleaned)) !== null) {
+    const target = im[1].split("/").pop()!.replace(/\.(ts|tsx|js|jsx|mjs|cjs)$/i, "");
+    if (target) edges.push({ source_qn: moduleName, target_name: target, kind: "import" });
+  }
+
+  const symbolRanges: { qn: string; start: number; end: number; isMethod: boolean }[] = [];
+  const seenLocal = new Set<string>();
+
+  const pushSymbol = (
+    name: string,
+    kind: "class" | "function" | "method",
+    parent: string,
+    headerIdx: number,
+    bodyStart: number,
+    bodyEnd: number,
+  ) => {
+    const qn = `${parent}::${name}`;
+    if (seenLocal.has(qn)) return qn;
+    seenLocal.add(qn);
+    const lineNumber = cleaned.slice(0, headerIdx).split("\n").length;
+    symbols.push({
+      qualified_name: qn,
+      name,
+      kind,
+      file_path: filePath,
+      line_number: lineNumber,
+      docstring: null,
+    });
+    symbolRanges.push({ qn, start: bodyStart, end: bodyEnd, isMethod: kind !== "class" });
+    return qn;
+  };
+
+  const findBlockEnd = (openBrace: number): number => {
+    let depth = 1;
+    let p = openBrace + 1;
+    while (p < cleaned.length && depth > 0) {
+      const ch = cleaned[p];
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+      p++;
+    }
+    return p;
+  };
+
+  // Class declarations
+  const classRe = /\bclass\s+([A-Za-z_$][\w$]*)\s*(?:extends\s+[A-Za-z_$][\w$.]*\s*)?\{/g;
+  let cm: RegExpExecArray | null;
+  while ((cm = classRe.exec(cleaned)) !== null) {
+    const name = cm[1];
+    const open = cleaned.indexOf("{", cm.index + cm[0].length - 1);
+    if (open === -1) continue;
+    const end = findBlockEnd(open);
+    const classQn = pushSymbol(name, "class", moduleName, cm.index, open + 1, end - 1);
+
+    // Methods inside class body
+    const body = cleaned.slice(open + 1, end - 1);
+    const methodRe = /(?:^|\n)[ \t]*(?:static\s+|async\s+|get\s+|set\s+|public\s+|private\s+|protected\s+)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g;
+    let mm: RegExpExecArray | null;
+    while ((mm = methodRe.exec(body)) !== null) {
+      const mname = mm[1];
+      if (JS_KEYWORDS.has(mname)) continue;
+      const absIdx = open + 1 + mm.index;
+      const mOpen = cleaned.indexOf("{", absIdx + mm[0].length - 1);
+      if (mOpen === -1) continue;
+      const mEnd = findBlockEnd(mOpen);
+      pushSymbol(mname, "method", classQn, absIdx, mOpen + 1, mEnd - 1);
+    }
+  }
+
+  // function declarations: function foo(...) {
+  const fnDeclRe = /\b(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g;
+  let fm: RegExpExecArray | null;
+  while ((fm = fnDeclRe.exec(cleaned)) !== null) {
+    const name = fm[1];
+    const open = cleaned.indexOf("{", fm.index + fm[0].length - 1);
+    if (open === -1) continue;
+    const end = findBlockEnd(open);
+    pushSymbol(name, "function", moduleName, fm.index, open + 1, end - 1);
+  }
+
+  // const foo = (...) => { ... }   /  const foo = function(...) { ... }
+  const arrowRe = /\b(?:export\s+(?:default\s+)?)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::\s*[^=]+)?=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{/g;
+  let am: RegExpExecArray | null;
+  while ((am = arrowRe.exec(cleaned)) !== null) {
+    const name = am[1];
+    const open = cleaned.indexOf("{", am.index + am[0].length - 1);
+    if (open === -1) continue;
+    const end = findBlockEnd(open);
+    pushSymbol(name, "function", moduleName, am.index, open + 1, end - 1);
+  }
+
+  // Resolve call sites to the innermost containing symbol
+  const sortedRanges = [...symbolRanges].sort((a, b) => (b.end - b.start) - (a.end - a.start));
+  const containerOf = (idx: number): string => {
+    // smallest range containing idx
+    let best: { qn: string; size: number } | null = null;
+    for (const r of sortedRanges) {
+      if (idx >= r.start && idx < r.end) {
+        const size = r.end - r.start;
+        if (!best || size < best.size) best = { qn: r.qn, size };
+      }
+    }
+    return best?.qn ?? moduleName;
+  };
+
+  const callRe = /([A-Za-z_$][\w$]*)\s*\(/g;
+  let call: RegExpExecArray | null;
+  while ((call = callRe.exec(cleaned)) !== null) {
+    const callee = call[1];
+    if (JS_KEYWORDS.has(callee)) continue;
+    const before = cleaned.slice(Math.max(0, call.index - 10), call.index);
+    if (/\b(function|class)\s*$/.test(before)) continue;
+    const source_qn = containerOf(call.index);
+    edges.push({ source_qn, target_name: callee, kind: "call" });
+  }
+
+  return { symbols, edges };
+}
+
 const isPython = (p: string) => p.endsWith(".py");
 const isCFamily = (p: string) => /\.(c|h|cpp|cc|cxx|hpp|hh|hxx)$/i.test(p);
+const isJsFamily = (p: string) => /\.(ts|tsx|js|jsx|mjs|cjs)$/i.test(p) && !p.endsWith(".d.ts");
 
 async function fetchTarball(owner: string, repo: string, branch: string): Promise<Uint8Array> {
   const url = `https://codeload.github.com/${owner}/${repo}/tar.gz/refs/heads/${branch}`;
