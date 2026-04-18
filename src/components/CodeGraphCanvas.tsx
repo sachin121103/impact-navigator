@@ -470,6 +470,12 @@ export const CodeGraphCanvas = ({
           onClick={resetZoom}
           aria-label="Reset"
         >⤧</button>
+        <button
+          className={`h-7 w-7 rounded font-mono text-[11px] hover:bg-secondary ${showZones ? "bg-secondary" : ""}`}
+          onClick={() => setShowZones((v) => !v)}
+          aria-label="Toggle zones"
+          title="Toggle folder zones"
+        >▦</button>
       </div>
 
       {/* Legend */}
@@ -480,6 +486,19 @@ export const CodeGraphCanvas = ({
         <span className="mx-1 h-3 w-px bg-border" />
         <LegendLine solid label="imports" />
         <LegendLine solid={false} label="calls" />
+        {showZones && zoneList.length > 0 && (
+          <>
+            <span className="mx-1 h-3 w-px bg-border" />
+            <span className="opacity-70">zones</span>
+            {zoneList.slice(0, 3).map((z) => (
+              <LegendDot
+                key={z.key}
+                color={`hsl(${z.hue} 38% 78%)`}
+                label={z.key}
+              />
+            ))}
+          </>
+        )}
       </div>
     </div>
   );
