@@ -59,12 +59,27 @@ Deno.serve(async (req) => {
     repo = data;
   } else if (body.repoUrl) {
     const url = normalizeRepoUrl(body.repoUrl);
-    const { data } = await supabase
+    // Try exact (case-insensitive) URL match first
+    const { data: byUrl } = await supabase
       .from("repos")
       .select("id,status,owner,name")
       .ilike("url", url)
-      .maybeSingle();
-    repo = data;
+      .limit(1);
+    repo = byUrl?.[0] ?? null;
+
+    // Fallback: parse owner/name from the URL and match those
+    if (!repo) {
+      const m = url.match(/github\.com\/([^/]+)\/([^/]+)/i);
+      if (m) {
+        const { data: byOwnerName } = await supabase
+          .from("repos")
+          .select("id,status,owner,name")
+          .ilike("owner", m[1])
+          .ilike("name", m[2])
+          .limit(1);
+        repo = byOwnerName?.[0] ?? null;
+      }
+    }
   }
 
   if (!repo) return json({ error: "Repository not indexed. Map it on Code Graph first." }, 404);
