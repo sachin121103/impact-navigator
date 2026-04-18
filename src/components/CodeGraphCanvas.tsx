@@ -78,6 +78,7 @@ export const CodeGraphCanvas = ({
   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const [size, setSize] = useState({ w: 800, h: 640 });
   const [, force] = useState(0);
+  const [showZones, setShowZones] = useState(true);
 
   // Compute degree per node (drives node size emphasis)
   const { nodes, links, neighborMap } = useMemo(() => {
