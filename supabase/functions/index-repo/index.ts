@@ -48,12 +48,30 @@ const PY_KEYWORDS = new Set([
   "locals", "vars", "dir", "id", "hash", "object", "Exception",
 ]);
 
+const C_KEYWORDS = new Set([
+  "if", "else", "for", "while", "do", "switch", "case", "default", "break",
+  "continue", "return", "goto", "sizeof", "typedef", "struct", "union", "enum",
+  "static", "extern", "const", "volatile", "register", "auto", "inline",
+  "void", "char", "short", "int", "long", "float", "double", "signed", "unsigned",
+  "_Bool", "bool", "true", "false", "NULL",
+  "printf", "scanf", "fprintf", "sprintf", "snprintf", "puts", "putchar",
+  "malloc", "calloc", "realloc", "free", "memcpy", "memset", "memmove",
+  "strlen", "strcpy", "strncpy", "strcmp", "strncmp", "strcat", "strchr",
+  "fopen", "fclose", "fread", "fwrite", "fgets", "fputs", "exit", "abort",
+  "assert",
+]);
+
 function moduleFromPath(path: string): string {
   // Strip leading "<repo>-<sha>/" and "src/" prefixes; convert to dotted module
   const parts = path.split("/").slice(1); // drop top-level extracted dir
   const cleaned = parts[0] === "src" ? parts.slice(1) : parts;
   const file = cleaned.join("/").replace(/\.py$/, "");
   return file.replace(/\//g, ".").replace(/\.__init__$/, "");
+}
+
+function moduleFromCPath(path: string): string {
+  const parts = path.split("/").slice(1);
+  return parts.join("/").replace(/\.(c|h|cpp|cc|cxx|hpp|hh|hxx)$/i, "");
 }
 
 function extractSymbolsAndCalls(filePath: string, source: string): {
@@ -158,15 +176,122 @@ function extractSymbolsAndCalls(filePath: string, source: string): {
   return { symbols, edges };
 }
 
+/**
+ * C / C++ extractor — strips comments + literals, then uses brace-tracking
+ * to find function definitions and call sites within them. Also captures
+ * #include edges as imports.
+ */
+function extractCSymbolsAndCalls(filePath: string, source: string): {
+  symbols: Symbol[];
+  edges: Edge[];
+} {
+  const moduleName = moduleFromCPath(filePath);
+  const symbols: Symbol[] = [];
+  const edges: Edge[] = [];
+
+  symbols.push({
+    qualified_name: moduleName,
+    name: moduleName.split("/").pop() || moduleName,
+    kind: "module",
+    file_path: filePath,
+    line_number: 1,
+    docstring: null,
+  });
+
+  // Strip block + line comments and string/char literals (replace with spaces
+  // so line numbers stay correct).
+  const cleaned = source
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length))
+    .replace(/"(?:\\.|[^"\\\n])*"/g, (m) => " ".repeat(m.length))
+    .replace(/'(?:\\.|[^'\\\n])*'/g, (m) => " ".repeat(m.length));
+
+  // #include → import edges from file scope
+  const includeRe = /^[ \t]*#\s*include\s*[<"]([^>"]+)[>"]/gm;
+  let inc: RegExpExecArray | null;
+  while ((inc = includeRe.exec(cleaned)) !== null) {
+    const incName = inc[1].split("/").pop()!.replace(/\.(h|hpp|hh|hxx)$/i, "");
+    if (incName) edges.push({ source_qn: moduleName, target_name: incName, kind: "import" });
+  }
+
+  // Function definitions: returnType ... name(args) { ... }
+  const fnHeaderRe =
+    /(^|\n)[ \t]*(?:(?:static|inline|extern|const|virtual|explicit|constexpr|[A-Za-z_][\w:*&<>\s,]*?)\s+)+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:const\s*)?(?:noexcept\s*)?\{/g;
+
+  let h: RegExpExecArray | null;
+  while ((h = fnHeaderRe.exec(cleaned)) !== null) {
+    const fnName = h[2];
+    if (C_KEYWORDS.has(fnName)) continue;
+    if (["if", "for", "while", "switch", "do"].includes(fnName)) continue;
+
+    const headerStart = h.index + h[1].length;
+    const openBrace = cleaned.indexOf("{", h.index + h[0].length - 1);
+    if (openBrace === -1) continue;
+
+    // Walk braces to find body end
+    let depth = 1;
+    let p = openBrace + 1;
+    while (p < cleaned.length && depth > 0) {
+      const ch = cleaned[p];
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+      p++;
+    }
+    const bodyEnd = p;
+    const lineNumber = cleaned.slice(0, headerStart).split("\n").length;
+    const qn = `${moduleName}::${fnName}`;
+
+    symbols.push({
+      qualified_name: qn,
+      name: fnName,
+      kind: "function",
+      file_path: filePath,
+      line_number: lineNumber,
+      docstring: null,
+    });
+
+    // Extract call sites in body
+    const body = cleaned.slice(openBrace + 1, bodyEnd - 1);
+    const callRe = /([A-Za-z_]\w*)\s*\(/g;
+    let c: RegExpExecArray | null;
+    while ((c = callRe.exec(body)) !== null) {
+      const callee = c[1];
+      if (C_KEYWORDS.has(callee)) continue;
+      if (callee === fnName) continue;
+      edges.push({ source_qn: qn, target_name: callee, kind: "call" });
+    }
+
+    fnHeaderRe.lastIndex = bodyEnd;
+  }
+
+  return { symbols, edges };
+}
+
+const isPython = (p: string) => p.endsWith(".py");
+const isCFamily = (p: string) => /\.(c|h|cpp|cc|cxx|hpp|hh|hxx)$/i.test(p);
+
 async function fetchTarball(owner: string, repo: string, branch: string): Promise<Uint8Array> {
   const url = `https://codeload.github.com/${owner}/${repo}/tar.gz/refs/heads/${branch}`;
   const res = await fetch(url, { headers: { "User-Agent": "impact-radar-indexer" } });
-  if (!res.ok) throw new Error(`Failed to download tarball: ${res.status}`);
+  if (!res.ok) throw new Error(`Failed to download tarball (${branch}): ${res.status}`);
   const buf = new Uint8Array(await res.arrayBuffer());
   return new Uint8Array(gunzipSync(Buffer.from(buf)));
 }
 
-async function* walkPythonFiles(tarBytes: Uint8Array) {
+async function resolveDefaultBranch(owner: string, repo: string, fallback: string): Promise<string> {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+      headers: { "User-Agent": "impact-radar-indexer", Accept: "application/vnd.github+json" },
+    });
+    if (!res.ok) return fallback;
+    const j = await res.json();
+    return j.default_branch || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function* walkSourceFiles(tarBytes: Uint8Array) {
   const extract = tar.extract();
   Readable.from(Buffer.from(tarBytes)).pipe(extract);
 
@@ -183,7 +308,7 @@ async function* walkPythonFiles(tarBytes: Uint8Array) {
       const path: string = header.name;
       if (
         header.type === "file" &&
-        path.endsWith(".py") &&
+        (isPython(path) || isCFamily(path)) &&
         !path.includes("/tests/") &&
         !path.includes("/test_") &&
         !path.includes("/.")
@@ -235,7 +360,9 @@ Deno.serve(async (req) => {
     const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+?)(?:\.git)?(?:\/)?$/);
     if (!match) throw new Error("Invalid GitHub URL");
     const [, owner, name] = match;
-    const branch = body.branch ?? (name === "requests" ? "main" : "main");
+
+    // Resolve real default branch via GitHub API; fall back to main → master
+    const branch: string = body.branch ?? (await resolveDefaultBranch(owner, name, "main"));
 
     // Upsert repo row → indexing
     const { data: repoRow, error: repoErr } = await supabase
@@ -252,18 +379,25 @@ Deno.serve(async (req) => {
     // Wipe previous data for this repo
     await supabase.from("symbols").delete().eq("repo_id", repoId);
 
-    // Download + extract
-    const tar = await fetchTarball(owner, name, branch);
-    await supabase.from("repos").update({ status_message: "Parsing Python files…" }).eq("id", repoId);
+    // Download tarball, with master fallback
+    let tarBytes: Uint8Array;
+    try {
+      tarBytes = await fetchTarball(owner, name, branch);
+    } catch {
+      tarBytes = await fetchTarball(owner, name, "master");
+    }
+    await supabase.from("repos").update({ status_message: "Parsing source files…" }).eq("id", repoId);
 
     const allSymbols: Symbol[] = [];
     const allEdges: Edge[] = [];
     const seenQn = new Set<string>();
     let fileCount = 0;
 
-    for await (const file of walkPythonFiles(tar)) {
+    for await (const file of walkSourceFiles(tarBytes)) {
       fileCount++;
-      const { symbols, edges } = extractSymbolsAndCalls(file.path, file.content);
+      const { symbols, edges } = isCFamily(file.path)
+        ? extractCSymbolsAndCalls(file.path, file.content)
+        : extractSymbolsAndCalls(file.path, file.content);
       for (const s of symbols) {
         if (seenQn.has(s.qualified_name)) continue;
         seenQn.add(s.qualified_name);
