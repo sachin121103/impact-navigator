@@ -133,10 +133,12 @@ const ImpactRadar = () => {
       });
       if (error) throw new Error(error.message);
       if (!(data as any)?.ok) throw new Error((data as any)?.error ?? "Indexing failed");
+      const language = await fetchRepoLanguage(repoUrl.trim());
       setRepoStatus({
         state: "ready",
         symbolCount: (data as any).symbols ?? 0,
         edgeCount: (data as any).edges ?? 0,
+        language,
       });
     } catch (err) {
       setRepoStatus({ state: "failed", message: (err as Error).message });
