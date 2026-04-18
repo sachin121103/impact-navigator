@@ -101,8 +101,25 @@ Deno.serve(async (req) => {
   }
 
   if (!repo) return json({ error: "Repository could not be resolved." }, 404);
+
+  // Poll until indexing finishes (index-repo runs async). Cap at ~110s.
   if (repo.status !== "ready") {
-    return json({ error: `Repository is still ${repo.status}. Try again in a moment.` }, 409);
+    const deadline = Date.now() + 110_000;
+    while (Date.now() < deadline && repo && repo.status !== "ready") {
+      if (repo.status === "failed") {
+        return json({ error: "Repository indexing failed. Try again." }, 502);
+      }
+      await new Promise((r) => setTimeout(r, 2500));
+      const { data: refreshed } = await supabase
+        .from("repos")
+        .select("id,status,owner,name")
+        .eq("id", repo.id)
+        .maybeSingle();
+      repo = refreshed;
+    }
+    if (!repo || repo.status !== "ready") {
+      return json({ error: "Repository is still indexing. Try again in a moment." }, 409);
+    }
   }
 
   // 2. Resolve target symbol — try the full query, then each identifier-like
