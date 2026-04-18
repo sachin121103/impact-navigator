@@ -11,6 +11,7 @@ export type OrphanInfo = {
 
 export type GraphMetrics = {
   pagerank: Map<string, number>;
+  pagerankPercentile: Map<string, number>;
   betweenness: Map<string, number>;
   clustering: Map<string, number>;
   stats: GraphStats;
@@ -361,11 +362,36 @@ export function computeAllMetrics(
   const cycles = detectCycles(nodes, edges);
   const orphans = detectOrphans(nodes, edges);
   const stats = computeGraphStats(nodes, edges, betweenness, cycles);
-  return { pagerank, betweenness, clustering, stats, cycles, orphans };
+  const pagerankPercentile = buildPercentileMap(pagerank);
+  return { pagerank, pagerankPercentile, betweenness, clustering, stats, cycles, orphans };
+}
+
+// Build an O(1) percentile lookup map from a value map.
+export function buildPercentileMap(map: Map<string, number>): Map<string, number> {
+  const sorted = [...map.values()].sort((a, b) => a - b);
+  const N = sorted.length;
+  const out = new Map<string, number>();
+  for (const [id, val] of map) {
+    let lo = 0, hi = N;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (sorted[mid] < val) lo = mid + 1;
+      else hi = mid;
+    }
+    out.set(id, N > 1 ? lo / (N - 1) : 0);
+  }
+  return out;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function sampleNodes(ids: string[], n: number): string[] {
+  if (ids.length <= n) return ids;
+  const step = ids.length / n;
+  const out: string[] = [];
+  for (let i = 0; i < n; i++) out.push(ids[Math.floor(i * step)]);
+  return out;
+}
+function _sampleNodes_old(ids: string[], n: number): string[] {
   const step = Math.floor(ids.length / n);
   return ids.filter((_, i) => i % step === 0).slice(0, n);
 }
