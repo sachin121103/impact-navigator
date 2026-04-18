@@ -589,7 +589,7 @@ export const CodeGraphCanvas = ({
               const labelW = labelText.length * fontSize * 0.58 + 8;
               // PageRank top-10%: outer glow ring
               const prPct = analysisMode === "pagerank" && metrics
-                ? percentileRank(metrics.pagerank, n.id) : 0;
+                ? (metrics.pagerankPercentile.get(n.id) ?? 0) : 0;
               const isTopPR = prPct >= 0.9;
               // Betweenness warning threshold
               const btScore = analysisMode === "betweenness" && metrics
