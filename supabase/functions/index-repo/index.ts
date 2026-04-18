@@ -360,7 +360,9 @@ Deno.serve(async (req) => {
     const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+?)(?:\.git)?(?:\/)?$/);
     if (!match) throw new Error("Invalid GitHub URL");
     const [, owner, name] = match;
-    const branch = body.branch ?? (name === "requests" ? "main" : "main");
+
+    // Resolve real default branch via GitHub API; fall back to main → master
+    const branch: string = body.branch ?? (await resolveDefaultBranch(owner, name, "main"));
 
     // Upsert repo row → indexing
     const { data: repoRow, error: repoErr } = await supabase
@@ -377,18 +379,25 @@ Deno.serve(async (req) => {
     // Wipe previous data for this repo
     await supabase.from("symbols").delete().eq("repo_id", repoId);
 
-    // Download + extract
-    const tar = await fetchTarball(owner, name, branch);
-    await supabase.from("repos").update({ status_message: "Parsing Python files…" }).eq("id", repoId);
+    // Download tarball, with master fallback
+    let tarBytes: Uint8Array;
+    try {
+      tarBytes = await fetchTarball(owner, name, branch);
+    } catch {
+      tarBytes = await fetchTarball(owner, name, "master");
+    }
+    await supabase.from("repos").update({ status_message: "Parsing source files…" }).eq("id", repoId);
 
     const allSymbols: Symbol[] = [];
     const allEdges: Edge[] = [];
     const seenQn = new Set<string>();
     let fileCount = 0;
 
-    for await (const file of walkPythonFiles(tar)) {
+    for await (const file of walkSourceFiles(tarBytes)) {
       fileCount++;
-      const { symbols, edges } = extractSymbolsAndCalls(file.path, file.content);
+      const { symbols, edges } = isCFamily(file.path)
+        ? extractCSymbolsAndCalls(file.path, file.content)
+        : extractSymbolsAndCalls(file.path, file.content);
       for (const s of symbols) {
         if (seenQn.has(s.qualified_name)) continue;
         seenQn.add(s.qualified_name);
