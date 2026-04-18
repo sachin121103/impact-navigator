@@ -76,11 +76,18 @@ function tstr(buf: Uint8Array, off: number, len: number): string {
 
 async function readTarGz(
   url: string,
-  maxFiles = 1500,
+  maxFiles = 600,
 ): Promise<{ path: string; content: string }[]> {
   const res = await fetch(url, { redirect: "follow" });
   if (!res.ok || !res.body) {
     throw new Error(`Tarball fetch failed: ${res.status}`);
+  }
+  // Pre-flight: refuse very large repos before we even decompress
+  const contentLength = Number(res.headers.get("content-length") ?? 0);
+  if (contentLength && contentLength > 25 * 1024 * 1024) {
+    throw new Error(
+      `Repo tarball is ${(contentLength / 1024 / 1024).toFixed(0)} MB — too large to map (limit 25 MB). Try a smaller repo.`,
+    );
   }
   const decompressed = res.body.pipeThrough(new DecompressionStream("gzip"));
   const chunks: Uint8Array[] = [];
@@ -92,8 +99,9 @@ async function readTarGz(
     if (value) {
       chunks.push(value);
       total += value.byteLength;
-      if (total > 80 * 1024 * 1024) {
-        throw new Error("Tarball exceeds 80 MB limit");
+      if (total > 35 * 1024 * 1024) {
+        try { await reader.cancel(); } catch { /* noop */ }
+        throw new Error("Repo too large to map (>35 MB decompressed). Try a smaller repo.");
       }
     }
   }
