@@ -617,7 +617,9 @@ Deno.serve(async (req) => {
         fileCount++;
         const { symbols, edges } = isCFamily(file.path)
           ? extractCSymbolsAndCalls(file.path, file.content)
-          : extractSymbolsAndCalls(file.path, file.content);
+          : isJsFamily(file.path)
+            ? extractJsSymbolsAndCalls(file.path, file.content)
+            : extractSymbolsAndCalls(file.path, file.content);
         for (const s of symbols) {
           if (seenQn.has(s.qualified_name)) continue;
           seenQn.add(s.qualified_name);
