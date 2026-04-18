@@ -86,6 +86,9 @@ export const SentinelGraphCanvas = ({
   const positions = useMemo(() => layout(graph), [graph]);
   const dead = useMemo(() => new Set(findDeadNodes(graph).map((n) => n.id)), [graph]);
 
+  // Perf gating: at high node counts, drop expensive per-node animations.
+  const heavy = graph.nodes.length > 200;
+
   const blast = useMemo(() => {
     if (!selectedId) return new Map<string, number>();
     const m = new Map<string, number>();
