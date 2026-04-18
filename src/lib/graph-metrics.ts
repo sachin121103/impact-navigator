@@ -230,7 +230,7 @@ export function detectOrphans(
 ): OrphanInfo {
   const inDegree = new Map<string, number>(nodes.map((n) => [n.id, 0]));
   for (const e of edges) {
-    if (e.type === "contains") continue;
+    if ((e.type as string) === "contains") continue;
     if (inDegree.has(e.target))
       inDegree.set(e.target, inDegree.get(e.target)! + 1);
   }
