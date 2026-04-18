@@ -360,6 +360,55 @@ export const CodeGraphCanvas = ({
   const showClassLabels = zoomLevel > 1.2;
   const showFnLabels = zoomLevel > 1.8;
 
+  // Per-tick label collision dedupe — produces set of node ids whose labels render
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const visibleLabelIds = useMemo(() => {
+    const result = new Set<string>();
+    type Box = { x: number; y: number; w: number; h: number };
+    const placed: Box[] = [];
+    const overlaps = (a: Box, b: Box) =>
+      a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+    // Priority order: active > neighbours > important > zoom-threshold
+    const ordered = [...nodes].sort((a, b) => {
+      const score = (n: SimNode) => {
+        if (activeId === n.id) return 1000;
+        if (finalHighlight?.has(n.id)) return 500;
+        if (importantIds.has(n.id)) return 100 + (n.degree ?? 0);
+        return n.degree ?? 0;
+      };
+      return score(b) - score(a);
+    });
+
+    for (const n of ordered) {
+      if (n.x == null || n.y == null) continue;
+      const isActive = activeId === n.id;
+      const inHighlight = finalHighlight?.has(n.id);
+      const isDim = finalHighlight ? !inHighlight : false;
+      if (isDim) continue; // hide dimmed labels entirely
+
+      const zoomShow =
+        n.type === "file" ? showFileLabels
+          : n.type === "class" ? showClassLabels
+            : showFnLabels;
+      const eligible = isActive || inHighlight || importantIds.has(n.id) || zoomShow;
+      if (!eligible) continue;
+
+      const text = n.type === "file" ? n.file.split("/").pop() ?? n.name : n.name;
+      const fontSize = isActive ? 10.5 : n.type === "file" ? 9 : 8;
+      const r = nodeR(n);
+      const w = text.length * fontSize * 0.58 + 8;
+      const h = fontSize + 4;
+      const box: Box = { x: n.x + r + 5, y: n.y - h / 2, w, h };
+
+      // Active labels always render, even if overlapping
+      if (!isActive && placed.some((p) => overlaps(p, box))) continue;
+      placed.push(box);
+      result.add(n.id);
+    }
+    return result;
+  }, [nodes, tickCount, activeId, finalHighlight, importantIds, showFileLabels, showClassLabels, showFnLabels]);
+
   return (
     <div className="relative h-full w-full texture-paper">
       <svg
