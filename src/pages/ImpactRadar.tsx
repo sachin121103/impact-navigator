@@ -42,8 +42,29 @@ type RepoStatus =
   | { state: "checking" }
   | { state: "not-found" }
   | { state: "indexing" }
-  | { state: "ready"; symbolCount: number; edgeCount: number }
+  | { state: "ready"; symbolCount: number; edgeCount: number; language?: string | null }
   | { state: "failed"; message: string };
+
+const parseOwnerRepo = (url: string): { owner: string; repo: string } | null => {
+  const m = url.trim().replace(/\.git$/i, "").replace(/\/+$/, "")
+    .match(/^https?:\/\/github\.com\/([^/\s]+)\/([^/\s]+)$/);
+  return m ? { owner: m[1], repo: m[2] } : null;
+};
+
+const fetchRepoLanguage = async (url: string): Promise<string | null> => {
+  const parts = parseOwnerRepo(url);
+  if (!parts) return null;
+  try {
+    const res = await fetch(`https://api.github.com/repos/${parts.owner}/${parts.repo}`, {
+      headers: { Accept: "application/vnd.github+json" },
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    return (j?.language as string) ?? null;
+  } catch {
+    return null;
+  }
+};
 
 const RISK_CLASS: Record<RiskLevel, string> = {
   high: "text-risk-high",
