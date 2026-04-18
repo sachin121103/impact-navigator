@@ -180,15 +180,7 @@ export const CodeGraphCanvas = ({
           </filter>
         </defs>
 
-        {/* Subtle grid */}
-        <rect
-          x={0}
-          y={0}
-          width={size.w}
-          height={size.h}
-          fill="url(#cg-glow)"
-          opacity={0.6}
-        />
+        {/* canvas left intentionally bare — paper texture shows through */}
 
         <g ref={gRef}>
           {/* Edges */}
@@ -209,7 +201,7 @@ export const CodeGraphCanvas = ({
                   stroke={EDGE_STROKE[l.type]}
                   strokeWidth={l.type === "imports" ? 1 : 0.6}
                   strokeDasharray={l.type === "calls" ? "2 3" : undefined}
-                  opacity={dim ? 0.08 : 1}
+                  opacity={dim ? 0.05 : 1}
                   style={{ transition: "opacity 200ms" }}
                 />
               );
@@ -288,8 +280,9 @@ export const CodeGraphCanvas = ({
                     <text
                       x={r + 4}
                       y={3}
-                      fontSize={n.type === "file" ? 9 : 8}
+                      fontSize={isSelected ? 10 : n.type === "file" ? 9 : 8}
                       fontFamily="var(--font-mono)"
+                      fontWeight={isSelected ? 600 : 400}
                       fill="hsl(var(--foreground))"
                       opacity={isSelected ? 1 : 0.7}
                     >
@@ -304,7 +297,7 @@ export const CodeGraphCanvas = ({
       </svg>
 
       {/* Controls */}
-      <div className="absolute right-3 top-3 flex flex-col gap-1 rounded-md border border-border bg-card/90 p-1 shadow-paper backdrop-blur">
+      <div className="absolute bottom-4 right-4 flex flex-col gap-1 rounded-full border border-border/60 bg-card/70 p-1 shadow-paper backdrop-blur">
         <button
           className="h-7 w-7 rounded text-sm hover:bg-secondary"
           onClick={() => {
@@ -337,7 +330,7 @@ export const CodeGraphCanvas = ({
       </div>
 
       {/* Legend */}
-      <div className="absolute bottom-3 left-3 flex items-center gap-4 rounded-md border border-border bg-card/90 px-3 py-2 font-mono text-[10px] text-muted-foreground shadow-paper backdrop-blur">
+      <div className="absolute bottom-4 left-4 flex items-center gap-3 rounded-full border border-border/60 bg-card/70 px-3 py-1.5 font-mono text-[10px] text-muted-foreground shadow-paper backdrop-blur">
         <LegendDot color="hsl(var(--accent))" label="file" />
         <LegendDot color="hsl(var(--foreground))" label="class" />
         <LegendDot color="hsl(var(--muted-foreground))" label="function" />
