@@ -26,7 +26,7 @@ type SimNode = GraphNode & {
 type SimLink = {
   source: SimNode | string;
   target: SimNode | string;
-  type: GraphEdge["type"];
+  type: GraphEdge["type"] | "contains";
 };
 
 const NODE_RADIUS = {
@@ -70,6 +70,19 @@ export const CodeGraphCanvas = ({
     const idx = new Map(nodes.map((n) => [n.id, n]));
     const links: SimLink[] = [];
     const neighborMap = new Map<string, Set<string>>();
+
+    // Implicit "contains" edges: file → its classes/functions (by file path)
+    const fileById = new Map<string, SimNode>();
+    for (const n of nodes) {
+      if (n.type === "file") fileById.set(n.file, n);
+    }
+    for (const n of nodes) {
+      if (n.type === "file") continue;
+      const parent = fileById.get(n.file);
+      if (parent && parent.id !== n.id) {
+        links.push({ source: parent, target: n, type: "contains" });
+      }
+    }
 
     for (const e of data.edges) {
       const s = idx.get(e.source);
