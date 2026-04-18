@@ -638,136 +638,150 @@ export const CodeGraphCanvas = ({
 
           {/* Nodes */}
           <g>
-            {nodes.map((n) => {
-              const r = analysisRadius(n, analysisMode, metrics);
-              const isSelected = selectedId === n.id;
-              const isHovered = hoveredId === n.id;
-              const isActive = isSelected || isHovered;
-              const isDim = finalHighlight ? !finalHighlight.has(n.id) : false;
-              const isMatch = searchMatches ? searchMatches.has(n.id) : false;
-              const color = analysisColor(n, analysisMode, metrics);
-              const labelVisible = visibleLabelIds.has(n.id);
-              const focusHide = focusMode && finalHighlight && isDim;
-              const nodeOpacity = focusHide ? 0.05 : isDim ? 0.15 : 1;
-              const labelText = n.type === "file" ? (n.file.split("/").pop() ?? n.name) : n.name;
-              const fontSize = isActive ? 10.5 : n.type === "file" ? 9 : 8;
-              const labelW = labelText.length * fontSize * 0.58 + 8;
-              // PageRank top-10%: outer glow ring
-              const prPct = analysisMode === "pagerank" && metrics
-                ? (metrics.pagerankPercentile.get(n.id) ?? 0) : 0;
-              const isTopPR = prPct >= 0.9;
-              // Betweenness warning threshold
-              const btScore = analysisMode === "betweenness" && metrics
-                ? (metrics.betweenness.get(n.id) ?? 0) : 0;
-              const isBtWarn = btScore > 0.5;
-              // Structural anomalies — always visible regardless of mode
-              const isCyclic = metrics?.cycles.cyclicNodeIds.has(n.id) ?? false;
-              const isOrphan = metrics?.orphans.orphanIds.has(n.id) ?? false;
+            {(() => {
+              const heavy = nodes.length > HEAVY_NODE_COUNT;
+              const veryHeavy = nodes.length > VERY_HEAVY_NODE_COUNT;
+              return nodes.map((n) => {
+                const r = analysisRadius(n, analysisMode, metrics);
+                const isSelected = selectedId === n.id;
+                const isHovered = hoveredId === n.id;
+                const isActive = isSelected || isHovered;
+                const isDim = finalHighlight ? !finalHighlight.has(n.id) : false;
+                const isMatch = searchMatches ? searchMatches.has(n.id) : false;
+                const color = analysisColor(n, analysisMode, metrics);
+                const labelVisible = visibleLabelIds.has(n.id);
+                const focusHide = focusMode && finalHighlight && isDim;
+                const nodeOpacity = focusHide ? 0.05 : isDim ? 0.15 : 1;
+                const labelText = n.type === "file" ? (n.file.split("/").pop() ?? n.name) : n.name;
+                const fontSize = isActive ? 10.5 : n.type === "file" ? 9 : 8;
+                const labelW = labelText.length * fontSize * 0.58 + 8;
+                // PageRank top-10%: outer glow ring
+                const prPct = analysisMode === "pagerank" && metrics
+                  ? (metrics.pagerankPercentile.get(n.id) ?? 0) : 0;
+                const isTopPR = prPct >= 0.9;
+                // Betweenness warning threshold
+                const btScore = analysisMode === "betweenness" && metrics
+                  ? (metrics.betweenness.get(n.id) ?? 0) : 0;
+                const isBtWarn = btScore > 0.5;
+                // Structural anomalies — always visible regardless of mode
+                const isCyclic = metrics?.cycles.cyclicNodeIds.has(n.id) ?? false;
+                const isOrphan = metrics?.orphans.orphanIds.has(n.id) ?? false;
 
-              return (
-                <g
-                  key={n.id}
-                  ref={(el) => {
-                    if (el) nodeRefs.current.set(n.id, el as SVGGElement);
-                    else nodeRefs.current.delete(n.id);
-                  }}
-                  style={{
-                    cursor: "pointer",
-                    opacity: nodeOpacity,
-                    transition: "opacity 150ms",
-                  }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSelect(n.id === selectedId ? null : n.id);
-                  }}
-                  onMouseEnter={() => setHoveredId(n.id)}
-                  onMouseLeave={() => setHoveredId(null)}
-                  onMouseDown={(e) => {
-                    const sim = simRef.current;
-                    if (!sim || !svgRef.current) return;
-                    const pt = svgRef.current.createSVGPoint();
-                    const ctm = (gRef.current as SVGGElement).getScreenCTM()!;
-                    sim.alphaTarget(0.3).restart();
-                    n.fx = n.x; n.fy = n.y;
-                    const move = (ev: MouseEvent) => {
-                      pt.x = ev.clientX; pt.y = ev.clientY;
-                      const p = pt.matrixTransform(ctm.inverse());
-                      n.fx = p.x; n.fy = p.y;
-                    };
-                    const up = () => {
-                      sim.alphaTarget(0);
-                      n.fx = null; n.fy = null;
-                      window.removeEventListener("mousemove", move);
-                      window.removeEventListener("mouseup", up);
-                    };
-                    window.addEventListener("mousemove", move);
-                    window.addEventListener("mouseup", up);
-                    e.preventDefault();
-                  }}
-                >
-                  {/* Selection / hover ring */}
-                  {isActive && (
+                // Heavy graphs: drop per-node animated rings (keep them only on
+                // active node) — they're the single biggest paint cost.
+                const showAnimatedRings = !veryHeavy || isActive;
+                // Heavy graphs: only the active/hovered node gets the SVG drop
+                // shadow filter — flat stroke for everyone else.
+                const nodeFilter = isActive
+                  ? "url(#node-shadow-active)"
+                  : heavy
+                    ? undefined
+                    : "url(#node-shadow)";
+
+                return (
+                  <g
+                    key={n.id}
+                    ref={(el) => {
+                      if (el) nodeRefs.current.set(n.id, el as SVGGElement);
+                      else nodeRefs.current.delete(n.id);
+                    }}
+                    style={{
+                      cursor: "pointer",
+                      opacity: nodeOpacity,
+                      transition: "opacity 150ms",
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelect(n.id === selectedId ? null : n.id);
+                    }}
+                    onMouseEnter={() => setHoveredId(n.id)}
+                    onMouseLeave={() => setHoveredId(null)}
+                    onMouseDown={(e) => {
+                      const sim = simRef.current;
+                      if (!sim || !svgRef.current) return;
+                      const pt = svgRef.current.createSVGPoint();
+                      const ctm = (gRef.current as SVGGElement).getScreenCTM()!;
+                      sim.alphaTarget(0.3).restart();
+                      n.fx = n.x; n.fy = n.y;
+                      const move = (ev: MouseEvent) => {
+                        pt.x = ev.clientX; pt.y = ev.clientY;
+                        const p = pt.matrixTransform(ctm.inverse());
+                        n.fx = p.x; n.fy = p.y;
+                      };
+                      const up = () => {
+                        sim.alphaTarget(0);
+                        n.fx = null; n.fy = null;
+                        window.removeEventListener("mousemove", move);
+                        window.removeEventListener("mouseup", up);
+                      };
+                      window.addEventListener("mousemove", move);
+                      window.addEventListener("mouseup", up);
+                      e.preventDefault();
+                    }}
+                  >
+                    {/* Selection / hover ring */}
+                    {isActive && (
+                      <circle
+                        r={r + 10}
+                        fill="none"
+                        stroke={color}
+                        strokeWidth={1.2}
+                        opacity={0.35}
+                        style={{ animation: isSelected ? "radar-pulse 2.4s ease-out infinite" : undefined }}
+                      />
+                    )}
+                    {/* Search match ring */}
+                    {isMatch && !isActive && (
+                      <circle
+                        r={r + 7}
+                        fill="none"
+                        stroke="hsl(32,82%,44%)"
+                        strokeWidth={1.2}
+                        opacity={0.6}
+                        style={{ animation: "radar-pulse 2s ease-out infinite" }}
+                      />
+                    )}
+                    {/* PageRank top-10% outer pulse ring */}
+                    {isTopPR && !isActive && showAnimatedRings && (
+                      <circle
+                        r={r + 14}
+                        fill="none"
+                        stroke="hsl(25,85%,42%)"
+                        strokeWidth={1}
+                        opacity={0.3}
+                        style={{ animation: "radar-pulse 2.8s ease-out infinite" }}
+                      />
+                    )}
+                    {/* Cycle ring — red dashed, always visible */}
+                    {isCyclic && !isActive && showAnimatedRings && (
+                      <circle
+                        r={r + 6}
+                        fill="none"
+                        stroke="hsl(6,72%,50%)"
+                        strokeWidth={1.2}
+                        strokeDasharray="3 2"
+                        opacity={0.65}
+                      />
+                    )}
+                    {/* Orphan ring — grey dotted, always visible */}
+                    {isOrphan && !isCyclic && !isActive && showAnimatedRings && (
+                      <circle
+                        r={r + 4}
+                        fill="none"
+                        stroke="hsl(25,10%,62%)"
+                        strokeWidth={1}
+                        strokeDasharray="2 2"
+                        opacity={0.5}
+                      />
+                    )}
+                    {/* Node */}
                     <circle
-                      r={r + 10}
-                      fill="none"
-                      stroke={color}
-                      strokeWidth={1.2}
-                      opacity={0.35}
-                      style={{ animation: isSelected ? "radar-pulse 2.4s ease-out infinite" : undefined }}
-                    />
-                  )}
-                  {/* Search match ring */}
-                  {isMatch && !isActive && (
-                    <circle
-                      r={r + 7}
-                      fill="none"
-                      stroke="hsl(32,82%,44%)"
-                      strokeWidth={1.2}
-                      opacity={0.6}
-                      style={{ animation: "radar-pulse 2s ease-out infinite" }}
-                    />
-                  )}
-                  {/* PageRank top-10% outer pulse ring */}
-                  {isTopPR && !isActive && (
-                    <circle
-                      r={r + 14}
-                      fill="none"
-                      stroke="hsl(25,85%,42%)"
-                      strokeWidth={1}
-                      opacity={0.3}
-                      style={{ animation: "radar-pulse 2.8s ease-out infinite" }}
-                    />
-                  )}
-                  {/* Cycle ring — red dashed, always visible */}
-                  {isCyclic && !isActive && (
-                    <circle
-                      r={r + 6}
-                      fill="none"
-                      stroke="hsl(6,72%,50%)"
-                      strokeWidth={1.2}
-                      strokeDasharray="3 2"
-                      opacity={0.65}
-                    />
-                  )}
-                  {/* Orphan ring — grey dotted, always visible */}
-                  {isOrphan && !isCyclic && !isActive && (
-                    <circle
-                      r={r + 4}
-                      fill="none"
-                      stroke="hsl(25,10%,62%)"
-                      strokeWidth={1}
-                      strokeDasharray="2 2"
-                      opacity={0.5}
-                    />
-                  )}
-                  {/* Node */}
-                  <circle
-                    r={r}
-                    fill={color}
-                    stroke={PAPER_BG}
-                    strokeWidth={1.5}
-                    filter={isActive ? "url(#node-shadow-active)" : "url(#node-shadow)"}
-                    opacity={isActive ? 1 : 0.88}
+                      r={r}
+                      fill={color}
+                      stroke={PAPER_BG}
+                      strokeWidth={1.5}
+                      filter={nodeFilter}
+                      opacity={isActive ? 1 : 0.88}
                   />
                   {/* Betweenness warning icon */}
                   {isBtWarn && (
