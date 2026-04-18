@@ -29,6 +29,21 @@ type SimLink = {
   type: GraphEdge["type"] | "contains";
 };
 
+// Derive a stable zone key from a file path: first 2 segments.
+const zoneKeyForFile = (file: string): string => {
+  if (!file) return "root";
+  const parts = file.split("/").filter(Boolean);
+  if (parts.length <= 1) return "root";
+  return parts.slice(0, Math.min(2, parts.length - 1)).join("/");
+};
+
+// Stable hash → hue
+const hashHue = (s: string): number => {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return ((h % 360) + 360) % 360;
+};
+
 const NODE_RADIUS = {
   file: 7,
   class: 5,
