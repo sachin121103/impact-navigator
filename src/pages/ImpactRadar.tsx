@@ -134,23 +134,12 @@ const ImpactRadar = () => {
           <ImpactInput value={query} onChange={setQuery} onSubmit={runAnalyze} loading={loading} />
 
           {error && (
-            <p className="mt-3 font-mono text-xs text-risk-high">
-              ⚠ {error}{" "}
-              {error.toLowerCase().includes("not indexed") && (
-                <Link to="/code-graph" className="underline underline-offset-2">
-                  Index it →
-                </Link>
-              )}
-            </p>
+            <p className="mt-3 font-mono text-xs text-risk-high">⚠ {error}</p>
           )}
 
           {!result && !loading && !error && (
             <p className="mt-3 px-1 font-mono text-[11px] text-muted-foreground">
-              Tip: index a repo on{" "}
-              <Link to="/code-graph" className="text-accent underline underline-offset-2">
-                Code Graph
-              </Link>{" "}
-              first, then come back and try a function name.
+              Tip: paste any public GitHub repo URL and a function name. New repos are indexed automatically on first run (may take ~30s).
             </p>
           )}
 
