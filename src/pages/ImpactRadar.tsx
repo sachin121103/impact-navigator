@@ -51,8 +51,10 @@ const RISK_CLASS: Record<RiskLevel, string> = {
   low: "text-risk-low",
 };
 
-const isGitHubUrl = (url: string) =>
-  /^https?:\/\/github\.com\/[^/]+\/[^/\s]+/.test(url.trim());
+const isGitHubUrl = (url: string) => {
+  const cleaned = url.trim().replace(/\.git$/i, "").replace(/\/+$/, "");
+  return /^https?:\/\/github\.com\/[^/\s]+\/[^/\s]+$/.test(cleaned);
+};
 
 const ImpactRadar = () => {
   const [repoUrl, setRepoUrl] = useState<string>(
