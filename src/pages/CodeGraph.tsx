@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -15,10 +15,10 @@ import { CodeGraphCanvas, type AnalysisMode } from "@/components/CodeGraphCanvas
 import { SAMPLE_GRAPH, type GraphPayload } from "@/lib/sample-graph";
 import {
   computeAllMetrics,
-  percentileRank,
   topN,
   type GraphMetrics,
 } from "@/lib/graph-metrics";
+import type { WorkerResponse } from "@/lib/metrics.worker";
 
 // ─── Shared styles ────────────────────────────────────────────────────────────
 const GLASS: React.CSSProperties = {
