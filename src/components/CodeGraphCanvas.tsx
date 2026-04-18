@@ -404,6 +404,7 @@ export const CodeGraphCanvas = ({
           <g pointerEvents="none">
             {zoneRects.map((z) => {
               const dim = finalHighlight && !z.members.some((m) => finalHighlight.has(m.id));
+              const labelW = z.key.length * 5.6 + 14;
               return (
                 <g key={z.key} style={{ transition: "opacity 200ms" }} opacity={dim ? 0.2 : 1}>
                   <rect
@@ -415,11 +416,22 @@ export const CodeGraphCanvas = ({
                     strokeDasharray="4 5"
                     strokeOpacity={0.4}
                   />
+                  {/* Label pill */}
+                  <rect
+                    x={z.x + 8} y={z.y + 6}
+                    width={labelW} height={14}
+                    rx={7} ry={7}
+                    fill={PAPER_BG}
+                    fillOpacity={0.92}
+                    stroke={`hsl(${z.hue},30%,65%)`}
+                    strokeOpacity={0.35}
+                    strokeWidth={0.6}
+                  />
                   <text
-                    x={z.x + 12} y={z.y + 18}
+                    x={z.x + 15} y={z.y + 16}
                     fontSize={9} fontFamily="var(--font-mono)"
-                    fill={`hsl(${z.hue},30%,36%)`}
-                    opacity={0.75}
+                    fill={`hsl(${z.hue},35%,32%)`}
+                    opacity={0.85}
                     style={{ textTransform: "uppercase", letterSpacing: "0.1em" }}
                   >
                     {z.key}
@@ -439,7 +451,10 @@ export const CodeGraphCanvas = ({
                 ? finalHighlight.has(s.id) && finalHighlight.has(t.id)
                 : true;
               const base = EDGE_BASE_OPACITY[l.type];
-              const opacity = isContains
+              const focusHide = focusMode && finalHighlight && !lit;
+              const opacity = focusHide
+                ? 0.03
+                : isContains
                 ? (finalHighlight ? (lit ? 0.15 : 0.02) : 0.1)
                 : lit
                   ? (finalHighlight ? Math.min(0.9, base * 1.6) : base)
