@@ -147,138 +147,140 @@ const ImpactRadar = () => {
   const affected = radarState.status === "result" ? radarState.data.affected : [];
   const summary = radarState.status === "result" ? radarState.data.summary : null;
 
+  const visual = (
+    <div className="relative">
+      <RadarVisual results={affected.length > 0 ? affected : undefined} />
+      <div className="pointer-events-none absolute -bottom-4 left-1/2 -translate-x-1/2 rounded-md border border-border bg-card px-4 py-2.5 font-mono text-xs shadow-paper whitespace-nowrap">
+        {summary ? (
+          <>
+            <span className="text-risk-high">●</span> {summary.high} will break ·{" "}
+            <span className="text-risk-med">●</span> {summary.medium} review ·{" "}
+            <span className="text-risk-low">●</span> {summary.low} safe
+          </>
+        ) : radarState.status === "loading" ? (
+          <span className="text-muted-foreground animate-pulse">scanning…</span>
+        ) : (
+          <span className="text-muted-foreground">enter a repo to begin</span>
+        )}
+      </div>
+    </div>
+  );
+
+  const panel = (
+    <div>
+      <ImpactInput
+        onRunRadar={handleRunRadar}
+        isLoading={radarState.status === "loading"}
+      />
+
+      {/* Repo URL input + status */}
+      <div className="mt-3 flex flex-wrap items-center gap-2 px-1">
+        <span className="font-mono text-xs text-muted-foreground">repo:</span>
+        <input
+          value={repoUrl}
+          onChange={(e) => setRepoUrl(e.target.value)}
+          placeholder="https://github.com/owner/repo"
+          spellCheck={false}
+          className="rounded bg-secondary px-2 py-0.5 font-mono text-xs text-foreground outline-none focus:ring-1 focus:ring-ring w-64 placeholder:text-muted-foreground/50"
+        />
+        <RepoStatusBadge status={repoStatus} />
+        {(repoStatus.state === "not-found" || repoStatus.state === "failed") && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 px-2 font-mono text-xs"
+            onClick={handleIndexRepo}
+            disabled={isIndexing}
+          >
+            {isIndexing ? (
+              <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Indexing…</>
+            ) : (
+              "Index repo"
+            )}
+          </Button>
+        )}
+      </div>
+
+      {radarState.status === "idle" && (
+        <div className="mt-8 flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-muted-foreground">
+          <Stat
+            value={repoStatus.state === "ready" ? String(repoStatus.symbolCount) : "—"}
+            label="symbols indexed"
+          />
+          <Stat
+            value={repoStatus.state === "ready" ? String(repoStatus.edgeCount) : "—"}
+            label="call edges"
+          />
+        </div>
+      )}
+
+      {radarState.status === "loading" && (
+        <div className="mt-8 text-sm text-muted-foreground font-mono animate-pulse">
+          Traversing call graph…
+        </div>
+      )}
+
+      {radarState.status === "error" && (
+        <div className="mt-8 rounded-md border border-risk-high/30 bg-risk-high/5 px-4 py-3 text-sm">
+          <span className="font-mono text-risk-high">error: </span>
+          <span className="text-foreground">{radarState.message}</span>
+        </div>
+      )}
+
+      {radarState.status === "result" && (
+        <div className="mt-6 space-y-4">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-mono text-muted-foreground">resolved:</span>
+            <code className="rounded bg-secondary px-2 py-0.5 font-mono text-foreground">
+              {radarState.data.resolvedSymbol.qualified_name}
+            </code>
+            <span className="rounded border border-border px-1.5 py-0.5 font-mono text-muted-foreground">
+              {radarState.data.resolvedSymbol.kind}
+            </span>
+          </div>
+
+          <div className="rounded-md border border-border bg-card shadow-paper overflow-hidden">
+            <div className="px-4 py-2 border-b border-border text-xs font-mono text-muted-foreground">
+              {radarState.data.summary.total} affected symbols
+            </div>
+            <div className="max-h-52 overflow-y-auto divide-y divide-border">
+              {affected.slice(0, 15).map((sym) => (
+                <div key={sym.id} className="flex items-center gap-3 px-4 py-2 text-xs">
+                  <span className={`shrink-0 ${RISK_CLASS[sym.risk]}`}>●</span>
+                  <span className="font-mono text-foreground truncate">{sym.name}</span>
+                  <span className="text-muted-foreground truncate flex-1 min-w-0">
+                    {sym.file_path.split("/").slice(-2).join("/")}
+                  </span>
+                  <span className="shrink-0 font-mono text-muted-foreground">d{sym.depth}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-muted-foreground">
+            <Stat value={String(radarState.data.summary.total)} label="affected" />
+            <Stat value={`${radarState.data.durationMs}ms`} label="radar time" />
+            <button
+              onClick={() => setRadarState({ status: "idle" })}
+              className="font-mono text-xs underline underline-offset-2 hover:text-foreground transition-colors"
+            >
+              reset
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <SubPageShell
       eyebrow="03 · impact radar"
       title="Impact Radar."
       tagline="What will I break?"
       description="Describe a change in plain English. Impact Radar maps every downstream dependency, ranks them by risk, and tells you exactly which files will break."
-    >
-      <div className="grid items-start gap-12 lg:grid-cols-2">
-        {/* Left column */}
-        <div>
-          <ImpactInput
-            onRunRadar={handleRunRadar}
-            isLoading={radarState.status === "loading"}
-          />
-
-          {/* Repo URL input + status */}
-          <div className="mt-3 flex flex-wrap items-center gap-2 px-1">
-            <span className="font-mono text-xs text-muted-foreground">repo:</span>
-            <input
-              value={repoUrl}
-              onChange={(e) => setRepoUrl(e.target.value)}
-              placeholder="https://github.com/owner/repo"
-              spellCheck={false}
-              className="rounded bg-secondary px-2 py-0.5 font-mono text-xs text-foreground outline-none focus:ring-1 focus:ring-ring w-64 placeholder:text-muted-foreground/50"
-            />
-            <RepoStatusBadge status={repoStatus} />
-            {(repoStatus.state === "not-found" || repoStatus.state === "failed") && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-6 px-2 font-mono text-xs"
-                onClick={handleIndexRepo}
-                disabled={isIndexing}
-              >
-                {isIndexing ? (
-                  <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Indexing…</>
-                ) : (
-                  "Index repo"
-                )}
-              </Button>
-            )}
-          </div>
-
-          {radarState.status === "idle" && (
-            <div className="mt-8 flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-muted-foreground">
-              <Stat
-                value={repoStatus.state === "ready" ? String(repoStatus.symbolCount) : "—"}
-                label="symbols indexed"
-              />
-              <Stat
-                value={repoStatus.state === "ready" ? String(repoStatus.edgeCount) : "—"}
-                label="call edges"
-              />
-            </div>
-          )}
-
-          {radarState.status === "loading" && (
-            <div className="mt-8 text-sm text-muted-foreground font-mono animate-pulse">
-              Traversing call graph…
-            </div>
-          )}
-
-          {radarState.status === "error" && (
-            <div className="mt-8 rounded-md border border-risk-high/30 bg-risk-high/5 px-4 py-3 text-sm">
-              <span className="font-mono text-risk-high">error: </span>
-              <span className="text-foreground">{radarState.message}</span>
-            </div>
-          )}
-
-          {radarState.status === "result" && (
-            <div className="mt-6 space-y-4">
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="font-mono text-muted-foreground">resolved:</span>
-                <code className="rounded bg-secondary px-2 py-0.5 font-mono text-foreground">
-                  {radarState.data.resolvedSymbol.qualified_name}
-                </code>
-                <span className="rounded border border-border px-1.5 py-0.5 font-mono text-muted-foreground">
-                  {radarState.data.resolvedSymbol.kind}
-                </span>
-              </div>
-
-              <div className="rounded-md border border-border bg-card shadow-paper overflow-hidden">
-                <div className="px-4 py-2 border-b border-border text-xs font-mono text-muted-foreground">
-                  {radarState.data.summary.total} affected symbols
-                </div>
-                <div className="max-h-52 overflow-y-auto divide-y divide-border">
-                  {affected.slice(0, 15).map((sym) => (
-                    <div key={sym.id} className="flex items-center gap-3 px-4 py-2 text-xs">
-                      <span className={`shrink-0 ${RISK_CLASS[sym.risk]}`}>●</span>
-                      <span className="font-mono text-foreground truncate">{sym.name}</span>
-                      <span className="text-muted-foreground truncate flex-1 min-w-0">
-                        {sym.file_path.split("/").slice(-2).join("/")}
-                      </span>
-                      <span className="shrink-0 font-mono text-muted-foreground">d{sym.depth}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-muted-foreground">
-                <Stat value={String(radarState.data.summary.total)} label="affected" />
-                <Stat value={`${radarState.data.durationMs}ms`} label="radar time" />
-                <button
-                  onClick={() => setRadarState({ status: "idle" })}
-                  className="font-mono text-xs underline underline-offset-2 hover:text-foreground transition-colors"
-                >
-                  reset
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right column */}
-        <div className="relative">
-          <RadarVisual results={affected.length > 0 ? affected : undefined} />
-          <div className="pointer-events-none absolute -bottom-4 left-1/2 -translate-x-1/2 rounded-md border border-border bg-card px-4 py-2.5 font-mono text-xs shadow-paper whitespace-nowrap">
-            {summary ? (
-              <>
-                <span className="text-risk-high">●</span> {summary.high} will break ·{" "}
-                <span className="text-risk-med">●</span> {summary.medium} review ·{" "}
-                <span className="text-risk-low">●</span> {summary.low} safe
-              </>
-            ) : radarState.status === "loading" ? (
-              <span className="text-muted-foreground animate-pulse">scanning…</span>
-            ) : (
-              <span className="text-muted-foreground">enter a repo to begin</span>
-            )}
-          </div>
-        </div>
-      </div>
-    </SubPageShell>
+      visual={visual}
+      panel={panel}
+    />
   );
 };
 
