@@ -318,6 +318,23 @@ export const CodeGraphCanvas = ({
 
   const finalHighlight = searchMatches ?? highlight;
 
+  // Top-N most-connected nodes per zone get persistent labels
+  const importantIds = useMemo(() => {
+    const set = new Set<string>();
+    const limits: Record<NodeType, number> = { file: 3, class: 2, function: 1 };
+    for (const z of zoneList) {
+      const byType: Record<NodeType, SimNode[]> = { file: [], class: [], function: [] };
+      for (const m of z.members) byType[m.type].push(m);
+      (Object.keys(byType) as NodeType[]).forEach((t) => {
+        byType[t]
+          .sort((a, b) => (b.degree ?? 0) - (a.degree ?? 0))
+          .slice(0, limits[t])
+          .forEach((n) => set.add(n.id));
+      });
+    }
+    return set;
+  }, [zoneList]);
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const zoneRects = useMemo(() => {
     if (!showZones) return [];
@@ -339,9 +356,9 @@ export const CodeGraphCanvas = ({
     });
   }, [zoneList, showZones, tickCount]); // tickCount triggers positional recompute
 
-  const showFileLabels = zoomLevel > 0.5;
-  const showClassLabels = zoomLevel > 0.9;
-  const showFnLabels = zoomLevel > 1.4;
+  const showFileLabels = zoomLevel > 0.7;
+  const showClassLabels = zoomLevel > 1.2;
+  const showFnLabels = zoomLevel > 1.8;
 
   return (
     <div className="relative h-full w-full texture-paper">
