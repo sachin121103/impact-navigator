@@ -320,6 +320,226 @@ function cFnBodies(src: string): { name: string; body: string }[] {
   return out;
 }
 
+// ---------- JS / TS parser -------------------------------------------------
+const JS_RESERVED = new Set([
+  "if", "else", "for", "while", "do", "switch", "case", "default",
+  "return", "break", "continue", "throw", "try", "catch", "finally",
+  "function", "class", "const", "let", "var", "new", "delete", "typeof",
+  "instanceof", "in", "of", "void", "yield", "await", "async", "static",
+  "public", "private", "protected", "readonly", "extends", "implements",
+  "interface", "type", "enum", "namespace", "module", "import", "export",
+  "from", "as", "true", "false", "null", "undefined", "this", "super",
+  "console", "require", "Promise", "Array", "Object", "String", "Number",
+  "Boolean", "Math", "JSON", "Date", "Error", "Set", "Map", "RegExp",
+  "parseInt", "parseFloat", "isNaN", "isFinite", "setTimeout", "setInterval",
+  "clearTimeout", "clearInterval", "fetch", "Symbol",
+]);
+
+function stripJsNoise(src: string): string {
+  let out = "";
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i];
+    const c2 = src[i + 1];
+    if (c === "/" && c2 === "/") {
+      while (i < n && src[i] !== "\n") { out += " "; i++; }
+      continue;
+    }
+    if (c === "/" && c2 === "*") {
+      i += 2;
+      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
+        out += src[i] === "\n" ? "\n" : " ";
+        i++;
+      }
+      i += 2;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      const q = c;
+      out += " ";
+      i++;
+      while (i < n && src[i] !== q) {
+        if (src[i] === "\\") { i += 2; continue; }
+        if (src[i] === "\n") break;
+        i++;
+      }
+      i++;
+      continue;
+    }
+    if (c === "`") {
+      i++;
+      out += " ";
+      while (i < n && src[i] !== "`") {
+        if (src[i] === "\\") { i += 2; continue; }
+        if (src[i] === "$" && src[i + 1] === "{") {
+          i += 2;
+          let depth = 1;
+          while (i < n && depth > 0) {
+            if (src[i] === "{") depth++;
+            else if (src[i] === "}") depth--;
+            if (depth > 0) out += src[i];
+            i++;
+          }
+          continue;
+        }
+        if (src[i] === "\n") out += "\n";
+        i++;
+      }
+      i++;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+interface JsParsed {
+  functions: string[];
+  classes: string[];
+  imports: string[];
+  calls: [string, string][];
+}
+
+const JS_CALL_RE = /\b([A-Za-z_$][\w$]*)\s*\(/g;
+
+function matchBrace(s: string, openIdx: number): number {
+  let depth = 0;
+  for (let j = openIdx; j < s.length; j++) {
+    if (s[j] === "{") depth++;
+    else if (s[j] === "}") {
+      depth--;
+      if (depth === 0) return j;
+    }
+  }
+  return s.length;
+}
+
+function parseJs(rawSrc: string): JsParsed {
+  const src = stripJsNoise(rawSrc);
+  const out: JsParsed = { functions: [], classes: [], imports: [], calls: [] };
+
+  const reImpFrom = /\bimport\b[^;'"`]*?\bfrom\s*['"]([^'"]+)['"]/g;
+  const reImpBare = /(?:^|[\n;])\s*import\s*['"]([^'"]+)['"]/g;
+  const reImpDyn = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+  const reReq = /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+  for (const re of [reImpFrom, reImpBare, reImpDyn, reReq]) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src)) !== null) out.imports.push(m[1]);
+  }
+
+  type Decl = {
+    qname: string;
+    name: string;
+    kind: "function" | "class" | "method";
+    bodyStart: number;
+    bodyEnd: number;
+  };
+  const decls: Decl[] = [];
+
+  const reFn = /\b(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)[^{]*\{/g;
+  let m: RegExpExecArray | null;
+  while ((m = reFn.exec(src)) !== null) {
+    const open = m.index + m[0].length - 1;
+    const close = matchBrace(src, open);
+    decls.push({ qname: m[1], name: m[1], kind: "function", bodyStart: open, bodyEnd: close });
+  }
+
+  const reArrow = /\b(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::\s*[^=;]+)?=\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::\s*[^=>]+)?=>\s*\{/g;
+  while ((m = reArrow.exec(src)) !== null) {
+    const open = m.index + m[0].length - 1;
+    const close = matchBrace(src, open);
+    decls.push({ qname: m[1], name: m[1], kind: "function", bodyStart: open, bodyEnd: close });
+  }
+
+  const reFnExpr = /\b(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function\s*\*?\s*[A-Za-z_$\w$]*\s*\([^)]*\)[^{]*\{/g;
+  while ((m = reFnExpr.exec(src)) !== null) {
+    const open = m.index + m[0].length - 1;
+    const close = matchBrace(src, open);
+    decls.push({ qname: m[1], name: m[1], kind: "function", bodyStart: open, bodyEnd: close });
+  }
+
+  const reCls = /\b(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)[^{]*\{/g;
+  while ((m = reCls.exec(src)) !== null) {
+    const clsName = m[1];
+    out.classes.push(clsName);
+    const open = m.index + m[0].length - 1;
+    const close = matchBrace(src, open);
+    const body = src.slice(open + 1, close);
+    const reMethod = /(?:^|[\n;{}])\s*(?:public\s+|private\s+|protected\s+|static\s+|readonly\s+|async\s+|\*\s*)*([A-Za-z_$][\w$]*)\s*\([^)]*\)[^{};=]*\{/g;
+    let mm: RegExpExecArray | null;
+    while ((mm = reMethod.exec(body)) !== null) {
+      const mname = mm[1];
+      if (JS_RESERVED.has(mname)) continue;
+      const localOpen = mm.index + mm[0].length - 1;
+      const absOpen = open + 1 + localOpen;
+      const absClose = matchBrace(src, absOpen);
+      decls.push({
+        qname: `${clsName}.${mname}`,
+        name: mname,
+        kind: "method",
+        bodyStart: absOpen,
+        bodyEnd: absClose,
+      });
+    }
+  }
+
+  decls.sort((a, b) => a.bodyStart - b.bodyStart);
+  for (const d of decls) out.functions.push(d.qname);
+
+  // Attribute calls to innermost containing decl
+  for (const d of decls) {
+    const re = new RegExp(JS_CALL_RE.source, "g");
+    re.lastIndex = d.bodyStart + 1;
+    let cm: RegExpExecArray | null;
+    while ((cm = re.exec(src)) !== null) {
+      if (cm.index >= d.bodyEnd) break;
+      const callee = cm[1];
+      if (JS_RESERVED.has(callee)) continue;
+      // Skip if this call lies inside a more deeply nested decl
+      let innermost = d;
+      for (const e of decls) {
+        if (e === d) continue;
+        if (e.bodyStart > d.bodyStart && e.bodyEnd <= d.bodyEnd &&
+            e.bodyStart <= cm.index && cm.index < e.bodyEnd) {
+          if (e.bodyStart > innermost.bodyStart) innermost = e;
+        }
+      }
+      if (innermost === d) out.calls.push([d.qname, callee]);
+    }
+  }
+
+  return out;
+}
+
+function resolveJsImport(
+  importerPath: string,
+  spec: string,
+  allFiles: Set<string>,
+): string | null {
+  if (!spec.startsWith(".")) return null;
+  const dir = importerPath.split("/").slice(0, -1).join("/");
+  const segs = (dir ? dir.split("/") : []).concat(spec.split("/"));
+  const stack: string[] = [];
+  for (const s of segs) {
+    if (s === "" || s === ".") continue;
+    if (s === "..") { stack.pop(); continue; }
+    stack.push(s);
+  }
+  const base = stack.join("/");
+  const exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+  if (allFiles.has(base)) return base;
+  for (const ext of exts) {
+    if (allFiles.has(base + ext)) return base + ext;
+  }
+  for (const ext of exts) {
+    const candidate = `${base}/index${ext}`;
+    if (allFiles.has(candidate)) return candidate;
+  }
+  return null;
+}
+
 // ---------- Build graph ----------------------------------------------------
 function buildGraph(files: { path: string; content: string }[]): {
   nodes: GraphNode[];
