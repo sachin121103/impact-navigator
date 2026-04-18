@@ -15,21 +15,12 @@ export const SubPageShell = ({
   title: string;
   tagline: string;
   description: string;
-  /** Full-bleed background visual (e.g. radar / star). */
   visual: React.ReactNode;
-  /** Glassy panel content (input, explanation, etc.) shown on the right. */
   panel: React.ReactNode;
-  /** Optional legend pill rendered bottom-left. */
   legend?: React.ReactNode;
 }) => {
   return (
-    <div className="relative h-screen w-full overflow-hidden texture-paper">
-      {/* Full-bleed visual */}
-      <div className="absolute inset-0 opacity-90">{visual}</div>
-
-      {/* Soft fade so panel text stays legible */}
-      <div className="pointer-events-none absolute inset-y-0 right-0 w-[520px] bg-gradient-to-l from-background/70 via-background/20 to-transparent" />
-
+    <div className="relative min-h-screen w-full overflow-hidden texture-paper">
       {/* Floating top bar */}
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between px-5 py-4">
         <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-border/60 bg-card/70 px-4 py-2 shadow-paper backdrop-blur">
@@ -53,9 +44,15 @@ export const SubPageShell = ({
         </Button>
       </header>
 
-      {/* Right-side content column */}
-      <aside className="pointer-events-none absolute right-0 top-0 z-10 flex h-full w-full max-w-[520px] flex-col justify-center px-8 py-24">
-        <div className="pointer-events-auto animate-fade-up">
+      {/* Two-column split: visual left, text right */}
+      <div className="grid min-h-screen grid-cols-1 items-center gap-8 px-6 pb-16 pt-24 lg:grid-cols-[1.1fr_440px] lg:gap-12 lg:pl-10 lg:pr-12">
+        {/* Visual column */}
+        <div className="relative flex h-[55vh] items-center justify-center lg:h-[80vh]">
+          <div className="w-full max-w-[680px]">{visual}</div>
+        </div>
+
+        {/* Text + panel column */}
+        <div className="relative animate-fade-up">
           <p className="mb-3 font-mono text-[11px] uppercase tracking-widest text-accent">
             · {eyebrow}
           </p>
@@ -70,7 +67,7 @@ export const SubPageShell = ({
           </p>
           <div className="mt-7">{panel}</div>
         </div>
-      </aside>
+      </div>
 
       {/* Legend pill */}
       {legend && (

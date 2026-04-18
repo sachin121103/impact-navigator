@@ -26,7 +26,7 @@ type SimNode = GraphNode & {
 type SimLink = {
   source: SimNode | string;
   target: SimNode | string;
-  type: GraphEdge["type"];
+  type: GraphEdge["type"] | "contains";
 };
 
 const NODE_RADIUS = {
@@ -45,6 +45,7 @@ const EDGE_STROKE = {
   imports: "hsl(var(--accent) / 0.55)",
   calls: "hsl(var(--foreground) / 0.22)",
   include: "hsl(var(--accent) / 0.4)",
+  contains: "hsl(var(--foreground) / 0.18)",
 } as const;
 
 export const CodeGraphCanvas = ({
@@ -69,6 +70,19 @@ export const CodeGraphCanvas = ({
     const idx = new Map(nodes.map((n) => [n.id, n]));
     const links: SimLink[] = [];
     const neighborMap = new Map<string, Set<string>>();
+
+    // Implicit "contains" edges: file → its classes/functions (by file path)
+    const fileById = new Map<string, SimNode>();
+    for (const n of nodes) {
+      if (n.type === "file") fileById.set(n.file, n);
+    }
+    for (const n of nodes) {
+      if (n.type === "file") continue;
+      const parent = fileById.get(n.file);
+      if (parent && parent.id !== n.id) {
+        links.push({ source: parent, target: n, type: "contains" });
+      }
+    }
 
     for (const e of data.edges) {
       const s = idx.get(e.source);
@@ -104,10 +118,18 @@ export const CodeGraphCanvas = ({
         "link",
         forceLink<SimNode, SimLink>(links)
           .id((d) => d.id)
-          .distance((l) => (l.type === "imports" ? 90 : 36))
-          .strength((l) => (l.type === "imports" ? 0.5 : 0.25)),
+          .distance((l) => {
+            if (l.type === "contains") return 18;
+            if (l.type === "imports") return 110;
+            return 50; // calls
+          })
+          .strength((l) => {
+            if (l.type === "contains") return 1.2;
+            if (l.type === "imports") return 0.45;
+            return 0.2; // calls
+          }),
       )
-      .force("charge", forceManyBody().strength(-110))
+      .force("charge", forceManyBody().strength(-140))
       .force(
         "collide",
         forceCollide<SimNode>().radius(
@@ -199,9 +221,11 @@ export const CodeGraphCanvas = ({
                   x2={t.x}
                   y2={t.y}
                   stroke={EDGE_STROKE[l.type]}
-                  strokeWidth={l.type === "imports" ? 1 : 0.6}
+                  strokeWidth={
+                    l.type === "imports" ? 1 : l.type === "contains" ? 0.5 : 0.6
+                  }
                   strokeDasharray={l.type === "calls" ? "2 3" : undefined}
-                  opacity={dim ? 0.05 : 1}
+                  opacity={dim ? 0.05 : l.type === "contains" ? 0.55 : 1}
                   style={{ transition: "opacity 200ms" }}
                 />
               );
