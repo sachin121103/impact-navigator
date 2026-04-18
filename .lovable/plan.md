@@ -1,50 +1,53 @@
 
+## Sentinel Graph — replace Code Star
 
-## Goal
-Make the Code Graph (`/code-graph`) work for JavaScript/TypeScript repos (like `sachin121103/impact-navigator`), which currently return 0 nodes because the parser only handles Python/C/C++.
+A new page that turns the existing `/code-star` route into `/sentinel-graph`, with three connected features: a color-coded dependency graph, a BFS "ripple" impact analysis, and a Blast Radius Test Orchestrator.
 
-## Root cause
-`supabase/functions/graph-meta/index.ts` filters files with:
-```
-KEEP_EXT = {.py, .ipynb, .c, .h, .cpp, .hpp, .cc}
-```
-Any TS/JS-only repo therefore yields `file_count: 0` → empty graph.
+### What gets built
 
-## Approach
-Extend `graph-meta` to also parse `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`. Reuse the same node/edge contract (`file`, `function`, `class`, `imports`, `calls`).
+**1. New page `src/pages/SentinelGraph.tsx`** (replaces `CodeStar.tsx`, route `/sentinel-graph`, with `/code-star` redirecting there). Nav link in `Index.tsx` updated from "Code Star" → "Sentinel Graph".
 
-### Changes to `supabase/functions/graph-meta/index.ts`
+**2. Graph data layer `src/lib/sentinel-graph.ts`**
+- TypeScript types: `SGNode { id, label, kind: 'file'|'function'|'test', ext?: 'ts'|'tsx'|'js'|'py'|'css'|'other', path }`, `SGEdge { from, to, kind: 'imports'|'calls'|'covers' }`.
+- Built-in JSON sample (~25 nodes including 5 test nodes, realistic ts/py/css mix, one obvious dead file).
+- Helpers: `bfsDownstream(graph, startId)` → ordered array with depth, `findDeadNodes(graph)` → nodes with zero incoming non-test edges, `testsForBlast(graph, blastIds)` → unique test nodes whose `covers` edge lands in the blast set.
+- `estimateTestTime(tests)` — each test node carries an `avgMs` (seeded), full-suite total = sum of all tests; saved = full − selected.
 
-1. **File filter** — add JS/TS extensions to `KEEP_EXT`. Also skip `.d.ts`, `node_modules`, `dist`, `build`, `.next`, test files (`*.test.*`, `*.spec.*`, `__tests__`).
+**3. Graph canvas `src/components/SentinelGraphCanvas.tsx`** (SVG, no new deps)
+- Force-ish deterministic layout (seeded radial + small relaxation, similar approach to existing `CodeGraphCanvas`).
+- Node color by ext: ts/tsx = teal accent, py = amber, css = sage, test = ink with flask icon, other = muted. Dead nodes get a red ring + slow pulsing glow (`animate-pulse` + drop-shadow filter).
+- Edge styles: imports = thin solid, calls = dashed, covers (test→target) = dotted accent.
+- Click handler → sets `selectedId`, triggers Impact Mode.
+- Framer Motion ripple: on selection, render concentric `<motion.circle>` rings expanding from the node (scale 0→4, opacity 0.4→0, staggered by depth). Downstream nodes fade non-blast nodes to 20% opacity and pulse blast nodes in BFS depth order using `transition={{ delay: depth * 0.08 }}`.
+- Legend chip row at bottom (file types, dead, test, blast).
 
-2. **JS/TS parser** (`parseJs`) — regex-based, mirroring `parsePy`:
-   - Strip block & line comments and string/template literals before scanning (avoids false matches).
-   - Detect:
-     - `function name(...)` and `async function name(...)`
-     - `class Name { ... }` with method declarations inside
-     - `const name = (...) => { ... }` / `const name = function(...) {}` arrow & expression functions
-     - `import ... from 'x'` / `import 'x'` / dynamic `import('x')` / CommonJS `require('x')`
-   - Track nesting (brace depth) to attribute calls to the innermost containing function — same shape as the Python pass.
+**4. Side panel (right column of `SubPageShell`'s `panel` slot)**
+- Three modes via tabs: **Overview**, **Impact**, **Blast Radius**.
+- Overview: counts (files, tests, dead nodes), "Toggle Dead Code Mode" switch (highlights dead in canvas).
+- Impact: shown when a node is selected. Lists downstream nodes grouped by depth with risk pill (depth 1 = HIGH, 2 = MED, 3+ = LOW), reusing the visual language from Impact Radar.
+- Blast Radius: "Mark as modified" button on selection → computes blast set + impacted tests. Shows:
+  - Test Execution Plan table (test name, file path, est. ms, covers count).
+  - Stats row: `X / Y tests` to run, `Estimated time` vs `Full suite`, `Time saved` (ms + %), with a thin progress bar.
+  - "Copy plan" button (copies test paths as a `pytest`/`vitest`-style command).
 
-3. **Import resolution** — for relative imports (`./foo`, `../bar/baz`), resolve against the importer's directory and try extensions `.ts, .tsx, .js, .jsx, .mjs, .cjs` plus `/index.*`. Emit an `imports` edge if the resolved path matches a known file node. Bare imports (e.g. `react`) are ignored.
-
-4. **Call resolution** — same deferred pass as Python: store `[callerId, calleeBareName]`, then resolve via `fnIndex` after all files are parsed.
-
-5. **No schema, no UI changes** — graph response shape stays identical, so `CodeGraphCanvas` renders TS repos with no further edits.
+**5. Framer Motion** — already not in deps; install `framer-motion`. Use only for ripple rings and node fade/pulse — keep bundle impact small.
 
 ### Files
-- **edit** `supabase/functions/graph-meta/index.ts` — add JS/TS extensions, parser, import/call resolution.
-- **deploy** `graph-meta` edge function after edit.
+- **add** `src/pages/SentinelGraph.tsx`
+- **add** `src/components/SentinelGraphCanvas.tsx`
+- **add** `src/lib/sentinel-graph.ts` (with embedded sample JSON)
+- **edit** `src/App.tsx` — add `/sentinel-graph` route, keep `/code-star` as redirect to `/sentinel-graph`
+- **edit** `src/pages/Index.tsx` — rename nav entry "Code Star" → "Sentinel Graph", update link target
+- **delete** `src/pages/CodeStar.tsx` (no longer referenced)
+- **add dep** `framer-motion`
+
+### Out of scope (this pass)
+- Real repo parsing for Sentinel Graph (uses curated JSON sample so the killer feature is demoable instantly). A "Paste repo" hookup to the existing `graph-meta` function can come next — noted but not built now.
+- Persisting modified-node selections across reloads.
+- Actually executing tests — the orchestrator outputs a plan only.
 
 ### Verification
-After deploy, hit:
-```
-GET /functions/v1/graph-meta?repo=https://github.com/sachin121103/impact-navigator
-```
-Expect `_meta.file_count > 0` and a populated `nodes`/`edges` array, then load `/code-graph` and confirm the visualization renders.
-
-## Out of scope
-- Type-aware resolution (TS compiler API) — overkill for a regex parser.
-- Bare-import resolution to `node_modules` — irrelevant for an in-repo call graph.
-- Vue/Svelte/Go/Rust — can be added later in the same pattern.
-
+1. `/sentinel-graph` loads, graph renders with colored nodes; one dead file glows red.
+2. Click any node → ripple animates outward, downstream nodes pulse in order, Impact tab populates.
+3. Switch to Blast Radius tab → table lists only tests connected to the blast set, with time-saved stats matching `full − sum(selected)`.
+4. Toggle Dead Code Mode → red glow intensifies; non-dead nodes desaturate.
