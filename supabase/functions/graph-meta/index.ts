@@ -48,14 +48,25 @@ const SKIP_DIRS = new Set([
   ".git", ".github", "site-packages", ".tox", ".eggs", "eggs",
   ".mypy_cache", ".pytest_cache", ".ruff_cache",
   "Images", "images",
+  "dist", "build", ".next", ".nuxt", ".turbo", ".cache",
+  "out", "coverage", "__tests__", "__mocks__",
 ]);
-const KEEP_EXT = new Set([".py", ".ipynb", ".c", ".h", ".cpp", ".hpp", ".cc"]);
+const KEEP_EXT = new Set([
+  ".py", ".ipynb",
+  ".c", ".h", ".cpp", ".hpp", ".cc",
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+]);
 
 function shouldSkip(rel: string): boolean {
   const parts = rel.split("/");
-  return parts.slice(0, -1).some(
+  if (parts.slice(0, -1).some(
     (p) => SKIP_DIRS.has(p) || (p.startsWith(".") && p.length > 1),
-  );
+  )) return true;
+  const base = parts[parts.length - 1];
+  // Skip TS declaration files and tests
+  if (base.endsWith(".d.ts")) return true;
+  if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/i.test(base)) return true;
+  return false;
 }
 
 function octal(buf: Uint8Array, off: number, len: number): number {
