@@ -282,7 +282,42 @@ export const CodeGraphCanvas = ({
       .alpha(1)
       .alphaDecay(0.025);
 
+    // Build zone-member index once per (re-)build for fast bbox recompute.
+    const zoneMembersByKey = new Map<string, SimNode[]>();
+    for (const z of zoneList) zoneMembersByKey.set(z.key, z.members);
+
     let lastZone = 0;
+    let settledTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const updateZoneRects = () => {
+      if (!showZones) return;
+      const PAD = 32;
+      for (const [key, members] of zoneMembersByKey) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        let any = false;
+        for (const p of members) {
+          if (p.x == null || p.y == null) continue;
+          const r = nodeR(p) + 2;
+          any = true;
+          if (p.x - r < minX) minX = p.x - r;
+          if (p.y - r < minY) minY = p.y - r;
+          if (p.x + r > maxX) maxX = p.x + r;
+          if (p.y + r > maxY) maxY = p.y + r;
+        }
+        if (!any) continue;
+        const x = minX - PAD, y = minY - PAD;
+        const w = maxX - minX + PAD * 2, h = maxY - minY + PAD * 2;
+        const rect = zoneRectRefs.current.get(key);
+        if (rect) {
+          rect.setAttribute("x", String(x));
+          rect.setAttribute("y", String(y));
+          rect.setAttribute("width", String(w));
+          rect.setAttribute("height", String(h));
+        }
+        const lbl = zoneLabelRefs.current.get(key);
+        if (lbl) lbl.setAttribute("transform", `translate(${x},${y})`);
+      }
+    };
 
     sim.on("tick", () => {
       for (const n of nodes) {
@@ -308,16 +343,29 @@ export const CodeGraphCanvas = ({
         el.setAttribute("y2", String(t.y - (dy / dist) * tr));
       }
       const now = Date.now();
-      if (now - lastZone > 80) {
+      if (now - lastZone > 120) {
         lastZone = now;
-        setTickCount((n) => n + 1);
+        updateZoneRects();
+      }
+
+      // Trigger a single React rerender after the simulation cools — this is
+      // when label collision dedupe is recomputed.
+      if (settledTimer) clearTimeout(settledTimer);
+      if (sim.alpha() < 0.05) {
+        settledTimer = setTimeout(() => {
+          updateZoneRects();
+          setLayoutVersion((v) => v + 1);
+        }, 200);
       }
     });
 
     simRef.current = sim;
-    return () => { sim.stop(); };
+    return () => {
+      sim.stop();
+      if (settledTimer) clearTimeout(settledTimer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, links, size.w, size.h, zoneAnchors, zoneByNodeId, physics]);
+  }, [nodes, links, size.w, size.h, zoneAnchors, zoneByNodeId, physics, showZones, zoneList]);
 
   useEffect(() => {
     if (!svgRef.current || !gRef.current) return;
