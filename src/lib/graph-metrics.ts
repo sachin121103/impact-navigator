@@ -391,10 +391,6 @@ function sampleNodes(ids: string[], n: number): string[] {
   for (let i = 0; i < n; i++) out.push(ids[Math.floor(i * step)]);
   return out;
 }
-function _sampleNodes_old(ids: string[], n: number): string[] {
-  const step = Math.floor(ids.length / n);
-  return ids.filter((_, i) => i % step === 0).slice(0, n);
-}
 
 // Interpolate between two HSL stops
 function lerpHSL(
