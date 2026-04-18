@@ -105,29 +105,44 @@ Deno.serve(async (req) => {
     return json({ error: `Repository is still ${repo.status}. Try again in a moment.` }, 409);
   }
 
-  // 2. Resolve target symbol — exact name first, then qualified_name, then ilike fallback
+  // 2. Resolve target symbol — try the full query, then each identifier-like
+  //    token in it (so "Delete update_game" still matches `update_game`).
+  const candidates = Array.from(
+    new Set(
+      [query, ...(query.match(/[A-Za-z_][\w.]*/g) ?? [])]
+        .map((s) => s.trim())
+        .filter((s) => s.length > 1),
+    ),
+  );
+
   let target: any = null;
-  {
+  for (const cand of candidates) {
     const { data: exact } = await supabase
       .from("symbols")
       .select("id,name,qualified_name,kind,file_path,line_number,fan_in,fan_out,churn")
       .eq("repo_id", repo.id)
-      .or(`name.eq.${query},qualified_name.eq.${query}`)
+      .or(`name.eq.${cand},qualified_name.eq.${cand}`)
       .order("fan_in", { ascending: false })
       .limit(1);
-    if (exact && exact.length) target = exact[0];
+    if (exact?.length) { target = exact[0]; break; }
   }
   if (!target) {
-    const { data: fuzzy } = await supabase
-      .from("symbols")
-      .select("id,name,qualified_name,kind,file_path,line_number,fan_in,fan_out,churn")
-      .eq("repo_id", repo.id)
-      .or(`name.ilike.%${query}%,qualified_name.ilike.%${query}%`)
-      .order("fan_in", { ascending: false })
-      .limit(1);
-    if (fuzzy && fuzzy.length) target = fuzzy[0];
+    for (const cand of candidates) {
+      const { data: fuzzy } = await supabase
+        .from("symbols")
+        .select("id,name,qualified_name,kind,file_path,line_number,fan_in,fan_out,churn")
+        .eq("repo_id", repo.id)
+        .or(`name.ilike.%${cand}%,qualified_name.ilike.%${cand}%`)
+        .order("fan_in", { ascending: false })
+        .limit(1);
+      if (fuzzy?.length) { target = fuzzy[0]; break; }
+    }
   }
-  if (!target) return json({ error: `No symbol matching "${query}" found.` }, 404);
+  if (!target) {
+    return json({
+      error: `No symbol matching "${query}" found in this repo. Note: the indexer currently only parses Python (.py) files.`,
+    }, 404);
+  }
 
   // 3. BFS upstream callers
   const MAX_DEPTH = 4;
