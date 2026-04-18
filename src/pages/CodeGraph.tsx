@@ -11,24 +11,63 @@ import {
   X,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { CodeGraphCanvas } from "@/components/CodeGraphCanvas";
+import { CodeGraphCanvas, type AnalysisMode } from "@/components/CodeGraphCanvas";
 import { SAMPLE_GRAPH, type GraphPayload } from "@/lib/sample-graph";
+import {
+  computeAllMetrics,
+  percentileRank,
+  topN,
+  type GraphMetrics,
+} from "@/lib/graph-metrics";
 
-// Warm glass — paper design system
+// ─── Shared styles ────────────────────────────────────────────────────────────
 const GLASS: React.CSSProperties = {
-  background: "rgba(252,249,244,0.82)",
+  background: "rgba(252,249,244,0.88)",
   borderColor: "rgba(160,138,110,0.28)",
   backdropFilter: "blur(14px)",
 };
-
 const T = {
   ink: "hsl(25,18%,14%)",
   muted: "hsl(25,10%,42%)",
   accent: "hsl(184,68%,34%)",
   border: "rgba(160,138,110,0.22)",
   dim: "hsl(25,10%,58%)",
+  green: "hsl(142,38%,38%)",
+  amber: "hsl(32,88%,50%)",
+  red: "hsl(6,70%,48%)",
 };
 
+// ─── Analysis mode config ─────────────────────────────────────────────────────
+const MODES: { id: AnalysisMode; label: string }[] = [
+  { id: "none",        label: "Structure" },
+  { id: "pagerank",    label: "Influence" },
+  { id: "betweenness", label: "Bottleneck Risk" },
+  { id: "clustering",  label: "Coupling" },
+];
+
+// ─── Health stat thresholds ───────────────────────────────────────────────────
+function diameterStatus(d: number): "good" | "warn" | "bad" {
+  return d <= 7 ? "good" : d <= 10 ? "warn" : "bad";
+}
+function pathStatus(p: number): "good" | "warn" | "bad" {
+  return p <= 4 ? "good" : p <= 6 ? "warn" : "bad";
+}
+function densityStatus(d: number): "good" | "warn" | "bad" {
+  return d >= 0.08 && d <= 0.35 ? "good" : d >= 0.05 && d <= 0.50 ? "warn" : "bad";
+}
+function componentStatus(c: number): "good" | "warn" | "bad" {
+  return c === 1 ? "good" : c <= 2 ? "warn" : "bad";
+}
+const STATUS_ICON = { good: "✓", warn: "△", bad: "⚠" } as const;
+const STATUS_COLOR = { good: T.green, warn: T.amber, bad: T.red } as const;
+
+function healthDots(score: number) {
+  const filled = score >= 80 ? 5 : score >= 65 ? 4 : score >= 50 ? 3 : score >= 35 ? 2 : 1;
+  const color = score >= 80 ? T.green : score >= 50 ? T.amber : T.red;
+  return { filled, color };
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
 const CodeGraph = () => {
   const [data, setData] = useState<GraphPayload>(SAMPLE_GRAPH);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -40,6 +79,12 @@ const CodeGraph = () => {
     owner: string; name: string; branch: string; file_count: number;
   } | null>(null);
   const [hasLoadedRepo, setHasLoadedRepo] = useState(false);
+  const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("none");
+
+  const metrics: GraphMetrics = useMemo(
+    () => computeAllMetrics(data.nodes, data.edges),
+    [data],
+  );
 
   const stats = useMemo(() => ({
     files: data.nodes.filter((n) => n.type === "file").length,
@@ -98,30 +143,32 @@ const CodeGraph = () => {
 
   const isEmpty = !hasLoadedRepo;
 
+  // Precompute top lists for health panel
+  const topBetweenness = useMemo(() => topN(metrics.betweenness, 3), [metrics]);
+  const topPagerank    = useMemo(() => topN(metrics.pagerank, 3), [metrics]);
+
+  const { filled: healthFilled, color: healthColor } = healthDots(metrics.stats.healthScore);
+
   return (
     <div className="relative h-screen w-full overflow-hidden texture-paper">
-      {/* Full-bleed canvas */}
+      {/* Canvas */}
       <div className={isEmpty ? "absolute inset-0 opacity-30" : "absolute inset-0"}>
         <CodeGraphCanvas
           data={data}
           selectedId={selectedId}
           onSelect={setSelectedId}
           search={search}
+          metrics={metrics}
+          analysisMode={analysisMode}
         />
       </div>
 
-      {/* Top bar */}
+      {/* ── Top bar ── */}
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between px-5 py-4">
-        {/* Brand */}
-        <div
-          className="pointer-events-auto flex items-center gap-3 rounded-full border px-4 py-2 shadow-paper"
-          style={GLASS}
-        >
+        <div className="pointer-events-auto flex items-center gap-3 rounded-full border px-4 py-2 shadow-paper" style={GLASS}>
           <Link to="/" className="flex items-center gap-2.5">
-            <div
-              className="relative grid h-6 w-6 place-items-center rounded-full border"
-              style={{ borderColor: "rgba(160,138,110,0.3)" }}
-            >
+            <div className="relative grid h-6 w-6 place-items-center rounded-full border"
+              style={{ borderColor: "rgba(160,138,110,0.3)" }}>
               <Compass className="h-3 w-3" style={{ color: T.accent }} strokeWidth={2.2} />
             </div>
             <span className="font-display text-sm font-semibold tracking-tight" style={{ color: T.ink }}>
@@ -133,14 +180,9 @@ const CodeGraph = () => {
           </span>
         </div>
 
-        {/* Right controls */}
         <div className="pointer-events-auto flex items-center gap-2">
-          {/* Node search */}
           {!isEmpty && (
-            <div
-              className="flex items-center gap-2 rounded-full border px-3 py-1.5 shadow-paper"
-              style={GLASS}
-            >
+            <div className="flex items-center gap-2 rounded-full border px-3 py-1.5 shadow-paper" style={GLASS}>
               <Search className="h-3.5 w-3.5 shrink-0" style={{ color: T.muted }} />
               <input
                 value={search}
@@ -156,13 +198,8 @@ const CodeGraph = () => {
               )}
             </div>
           )}
-
-          {/* Repo input */}
           {!isEmpty && (
-            <div
-              className="flex items-center gap-2 rounded-full border px-3 py-1.5 shadow-paper"
-              style={GLASS}
-            >
+            <div className="flex items-center gap-2 rounded-full border px-3 py-1.5 shadow-paper" style={GLASS}>
               <input
                 value={repoInput}
                 onChange={(e) => setRepoInput(e.target.value)}
@@ -172,36 +209,49 @@ const CodeGraph = () => {
                 onKeyDown={(e) => e.key === "Enter" && loadRepo()}
               />
               <button
-                onClick={loadRepo}
-                disabled={loading}
+                onClick={loadRepo} disabled={loading}
                 className="flex items-center gap-1 rounded-full px-3 py-1 font-mono text-[11px] transition-colors disabled:opacity-50"
-                style={{
-                  background: "hsl(184,68%,34%,0.1)",
-                  color: T.accent,
-                  border: `1px solid hsl(184,68%,34%,0.3)`,
-                }}
+                style={{ background: "rgba(45,170,160,0.1)", color: T.accent, border: `1px solid rgba(45,170,160,0.3)` }}
               >
                 {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : "Map"}
               </button>
             </div>
           )}
-
-          <Link
-            to="/"
-            className="flex items-center gap-1.5 rounded-full border px-3 py-1.5 font-mono text-xs shadow-paper transition-colors"
-            style={{ ...GLASS, color: T.muted }}
-          >
+          <Link to="/" className="flex items-center gap-1.5 rounded-full border px-3 py-1.5 font-mono text-xs shadow-paper transition-colors"
+            style={{ ...GLASS, color: T.muted }}>
             <ArrowLeft className="h-3.5 w-3.5" /> Back
           </Link>
         </div>
       </header>
 
-      {/* Stats pill */}
+      {/* ── Analysis mode toggle ── */}
       {!isEmpty && (
-        <div
-          className="pointer-events-none absolute right-5 top-[68px] z-10 rounded-full border px-4 py-1.5 font-mono text-[10px] tracking-wider shadow-paper"
-          style={{ ...GLASS, color: T.muted }}
-        >
+        <div className="pointer-events-auto absolute left-1/2 top-[68px] z-20 -translate-x-1/2 flex items-center gap-1 rounded-full border p-1 shadow-paper" style={GLASS}>
+          {MODES.map((m) => {
+            const active = analysisMode === m.id;
+            return (
+              <button
+                key={m.id}
+                onClick={() => setAnalysisMode(m.id)}
+                className="rounded-full px-3 py-1 font-mono text-[10px] transition-all"
+                style={{
+                  background: active ? "rgba(45,170,160,0.12)" : "transparent",
+                  color: active ? T.accent : T.muted,
+                  border: active ? `1px solid rgba(45,170,160,0.35)` : "1px solid transparent",
+                  fontWeight: active ? 600 : 400,
+                }}
+              >
+                {m.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Stats pill ── */}
+      {!isEmpty && (
+        <div className="pointer-events-none absolute right-5 top-[68px] z-10 rounded-full border px-4 py-1.5 font-mono text-[10px] tracking-wider shadow-paper"
+          style={{ ...GLASS, color: T.muted }}>
           {meta && (
             <span style={{ color: T.ink }}>
               {meta.owner}/{meta.name}
@@ -218,14 +268,116 @@ const CodeGraph = () => {
         </div>
       )}
 
-      {/* Empty state */}
+      {/* ── Architecture Health panel ── */}
+      {!isEmpty && analysisMode !== "none" && (
+        <aside
+          className="pointer-events-auto absolute right-4 z-20 rounded-2xl border shadow-lift"
+          style={{
+            ...GLASS,
+            top: selected ? undefined : "5rem",
+            bottom: selected ? "1rem" : undefined,
+            width: 272,
+            // when drawer is open, sit below it; otherwise anchor from top
+            ...(selected ? { top: "auto" } : {}),
+          }}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-3"
+            style={{ borderBottom: `1px solid ${T.border}` }}>
+            <span className="font-display text-sm font-semibold" style={{ color: T.ink }}>
+              Architecture Health
+            </span>
+            <div className="flex items-center gap-0.5">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <span
+                  key={i}
+                  className="h-2 w-2 rounded-full"
+                  style={{ background: i < healthFilled ? healthColor : "rgba(160,138,110,0.25)" }}
+                />
+              ))}
+              <span className="ml-1.5 font-mono text-[11px] font-semibold" style={{ color: healthColor }}>
+                {metrics.stats.healthScore}
+              </span>
+            </div>
+          </div>
+
+          {/* Stat rows */}
+          <div className="px-4 py-3" style={{ borderBottom: `1px solid ${T.border}` }}>
+            {[
+              { label: "Diameter", value: `${metrics.stats.diameter} hops`, status: diameterStatus(metrics.stats.diameter) },
+              { label: "Avg path", value: `${metrics.stats.avgPathLength} hops`, status: pathStatus(metrics.stats.avgPathLength) },
+              { label: "Density", value: `${(metrics.stats.density * 100).toFixed(1)}%`, status: densityStatus(metrics.stats.density) },
+              { label: "Components", value: String(metrics.stats.components), status: componentStatus(metrics.stats.components) },
+            ].map((row) => (
+              <div key={row.label} className="flex items-center justify-between py-1 font-mono text-[11px]">
+                <span style={{ color: T.muted }}>{row.label}</span>
+                <div className="flex items-center gap-2">
+                  <span style={{ color: T.ink }}>{row.value}</span>
+                  <span className="w-4 text-center" style={{ color: STATUS_COLOR[row.status] }}>
+                    {STATUS_ICON[row.status]}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Top bottlenecks */}
+          <div className="px-4 py-3" style={{ borderBottom: `1px solid ${T.border}` }}>
+            <p className="mb-1.5 font-mono text-[9px] uppercase tracking-widest" style={{ color: T.dim }}>
+              Top bottlenecks
+            </p>
+            {topBetweenness.map(([id, score]) => {
+              const label = score > 0.5 ? "Critical" : score > 0.25 ? "Review" : "Fine";
+              const labelColor = score > 0.5 ? T.red : score > 0.25 ? T.amber : T.green;
+              return (
+                <button
+                  key={id}
+                  onClick={() => setSelectedId(id)}
+                  className="flex w-full items-center justify-between rounded-lg px-1.5 py-1 transition-colors hover:bg-secondary"
+                >
+                  <span className="truncate font-mono text-[10px]" style={{ color: T.ink, maxWidth: 140 }}>
+                    {id.split("/").pop()}
+                  </span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="font-mono text-[10px]" style={{ color: T.dim }}>
+                      {score.toFixed(2)}
+                    </span>
+                    <span className="font-mono text-[9px]" style={{ color: labelColor }}>{label}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Most influential */}
+          <div className="px-4 py-3">
+            <p className="mb-1.5 font-mono text-[9px] uppercase tracking-widest" style={{ color: T.dim }}>
+              Most influential (PageRank)
+            </p>
+            {topPagerank.map(([id, score]) => (
+              <button
+                key={id}
+                onClick={() => setSelectedId(id)}
+                className="flex w-full items-center justify-between rounded-lg px-1.5 py-1 transition-colors hover:bg-secondary"
+              >
+                <span className="truncate font-mono text-[10px]" style={{ color: T.ink, maxWidth: 160 }}>
+                  {id.split("/").pop()}
+                </span>
+                <span className="font-mono text-[10px] shrink-0" style={{ color: T.dim }}>
+                  {score.toFixed(3)}
+                </span>
+              </button>
+            ))}
+          </div>
+        </aside>
+      )}
+
+      {/* ── Empty state ── */}
       {isEmpty && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-6">
           <div className="pointer-events-auto w-full max-w-xl text-center">
-            <div
-              className="mx-auto mb-5 grid h-12 w-12 place-items-center rounded-full border shadow-paper"
-              style={{ borderColor: "rgba(160,138,110,0.28)", background: "rgba(252,249,244,0.7)" }}
-            >
+            <div className="mx-auto mb-5 grid h-12 w-12 place-items-center rounded-full border shadow-paper"
+              style={{ borderColor: "rgba(160,138,110,0.28)", background: "rgba(252,249,244,0.7)" }}>
               <Compass className="h-5 w-5" style={{ color: T.accent }} strokeWidth={2} />
             </div>
             <h1 className="mb-2 font-display text-3xl font-semibold tracking-tight" style={{ color: T.ink }}>
@@ -234,10 +386,7 @@ const CodeGraph = () => {
             <p className="mb-7 text-sm" style={{ color: T.muted }}>
               Visualise files, classes and call graphs as a living constellation.
             </p>
-            <div
-              className="mx-auto flex items-center gap-2 rounded-full border p-1.5 pl-4 shadow-paper"
-              style={GLASS}
-            >
+            <div className="mx-auto flex items-center gap-2 rounded-full border p-1.5 pl-4 shadow-paper" style={GLASS}>
               <Search className="h-4 w-4 shrink-0" style={{ color: T.muted }} />
               <Input
                 value={repoInput}
@@ -249,14 +398,9 @@ const CodeGraph = () => {
                 autoFocus
               />
               <button
-                onClick={loadRepo}
-                disabled={loading}
+                onClick={loadRepo} disabled={loading}
                 className="h-9 rounded-full px-4 font-mono text-sm transition-colors disabled:opacity-50"
-                style={{
-                  background: "hsl(184,68%,34%,0.12)",
-                  color: T.accent,
-                  border: "1px solid hsl(184,68%,34%,0.32)",
-                }}
+                style={{ background: "rgba(45,170,160,0.12)", color: T.accent, border: "1px solid rgba(45,170,160,0.32)" }}
               >
                 {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Map repo"}
               </button>
@@ -270,80 +414,105 @@ const CodeGraph = () => {
             >
               or explore the sample →
             </button>
-            {error && (
-              <p className="mt-4 font-mono text-xs" style={{ color: "hsl(6,70%,48%)" }}>
-                ⚠ {error}
-              </p>
-            )}
+            {error && <p className="mt-4 font-mono text-xs" style={{ color: T.red }}>⚠ {error}</p>}
           </div>
         </div>
       )}
 
       {!isEmpty && error && (
-        <div
-          className="pointer-events-auto absolute left-1/2 top-[68px] z-10 -translate-x-1/2 rounded-full border px-4 py-1.5 font-mono text-xs shadow-paper"
-          style={{ ...GLASS, color: "hsl(6,70%,48%)", borderColor: "hsl(6,70%,48%,0.3)" }}
-        >
+        <div className="pointer-events-auto absolute left-1/2 top-[68px] z-10 -translate-x-1/2 rounded-full border px-4 py-1.5 font-mono text-xs shadow-paper"
+          style={{ ...GLASS, color: T.red, borderColor: "rgba(200,60,50,0.3)" }}>
           ⚠ {error}
         </div>
       )}
 
-      {/* Selection drawer */}
+      {/* ── Selection drawer ── */}
       {selected && (
         <aside
-          className="pointer-events-auto absolute right-4 top-20 bottom-4 z-20 flex w-80 animate-slide-in-right flex-col rounded-2xl border shadow-lift"
+          className="pointer-events-auto absolute right-4 top-20 bottom-4 z-20 flex w-80 animate-slide-in-right flex-col rounded-2xl border shadow-lift overflow-hidden"
           style={GLASS}
         >
-          <div
-            className="flex items-start justify-between px-5 py-4"
-            style={{ borderBottom: `1px solid ${T.border}` }}
-          >
+          {/* Header */}
+          <div className="flex items-start justify-between px-5 py-4 shrink-0"
+            style={{ borderBottom: `1px solid ${T.border}` }}>
             <div className="min-w-0 flex-1">
               <div className="mb-2 flex items-center gap-2">
                 <NodeTypeIcon type={selected.type} />
-                <span
-                  className="rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider"
-                  style={{ borderColor: T.border, color: T.muted }}
-                >
+                <span className="rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider"
+                  style={{ borderColor: T.border, color: T.muted }}>
                   {selected.type}
                 </span>
               </div>
-              <h3 className="break-words font-display text-lg font-semibold leading-tight"
-                style={{ color: T.ink }}>
+              <h3 className="break-words font-display text-lg font-semibold leading-tight" style={{ color: T.ink }}>
                 {selected.name}
               </h3>
-              <p className="mt-1 break-all font-mono text-[11px]" style={{ color: T.muted }}>
-                {selected.file}
-              </p>
+              <p className="mt-1 break-all font-mono text-[11px]" style={{ color: T.muted }}>{selected.file}</p>
             </div>
             <button
               onClick={() => setSelectedId(null)}
               className="ml-2 grid h-7 w-7 shrink-0 place-items-center rounded-full transition-colors hover:bg-secondary"
-              style={{ color: T.muted }}
-              aria-label="Close"
+              style={{ color: T.muted }} aria-label="Close"
             >
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
 
           <div className="flex-1 overflow-y-auto px-5 py-4">
+            {/* File stats */}
             {selected.type === "file" && (
-              <div
-                className="mb-5 grid grid-cols-2 gap-3 rounded-xl border p-3 text-xs"
-                style={{ borderColor: T.border, background: "rgba(160,138,110,0.06)" }}
-              >
+              <div className="mb-4 grid grid-cols-2 gap-3 rounded-xl border p-3 text-xs"
+                style={{ borderColor: T.border, background: "rgba(160,138,110,0.06)" }}>
                 <MetaField label="LOC" value={selected.loc ?? "—"} />
                 <MetaField label="Churn 90d" value={selected.churn_score ?? 0} />
-                <div className="col-span-2 flex items-center gap-1.5 font-mono text-[10px]"
-                  style={{ color: T.muted }}>
+                <div className="col-span-2 flex items-center gap-1.5 font-mono text-[10px]" style={{ color: T.muted }}>
                   <GitCommit className="h-3 w-3" />
                   last commit · {selected.last_commit ?? "—"}
                 </div>
               </div>
             )}
 
-            <p className="mb-2 font-mono text-[10px] uppercase tracking-widest"
-              style={{ color: T.muted }}>
+            {/* Graph metrics for selected node */}
+            {analysisMode !== "none" && (
+              <div className="mb-4 rounded-xl border p-3"
+                style={{ borderColor: T.border, background: "rgba(160,138,110,0.06)" }}>
+                <p className="mb-2 font-mono text-[9px] uppercase tracking-widest" style={{ color: T.dim }}>
+                  Graph metrics
+                </p>
+                <NodeMetricRow
+                  label="PageRank"
+                  value={(metrics.pagerank.get(selected.id) ?? 0).toFixed(4)}
+                  tag={`top ${Math.round((1 - percentileRank(metrics.pagerank, selected.id)) * 100)}%`}
+                  tagColor={T.accent}
+                />
+                <NodeMetricRow
+                  label="Betweenness"
+                  value={(metrics.betweenness.get(selected.id) ?? 0).toFixed(3)}
+                  tag={
+                    (metrics.betweenness.get(selected.id) ?? 0) > 0.5 ? "Critical"
+                      : (metrics.betweenness.get(selected.id) ?? 0) > 0.25 ? "Review"
+                        : "Fine"
+                  }
+                  tagColor={
+                    (metrics.betweenness.get(selected.id) ?? 0) > 0.5 ? T.red
+                      : (metrics.betweenness.get(selected.id) ?? 0) > 0.25 ? T.amber
+                        : T.green
+                  }
+                />
+                <NodeMetricRow
+                  label="Clustering"
+                  value={(metrics.clustering.get(selected.id) ?? 0).toFixed(3)}
+                  tag={
+                    (metrics.clustering.get(selected.id) ?? 0) >= 0.6 ? "High"
+                      : (metrics.clustering.get(selected.id) ?? 0) >= 0.3 ? "Medium"
+                        : "Low"
+                  }
+                  tagColor={T.muted}
+                />
+              </div>
+            )}
+
+            {/* Connections */}
+            <p className="mb-2 font-mono text-[10px] uppercase tracking-widest" style={{ color: T.muted }}>
               connections · {neighbors.length}
             </p>
             <ul className="space-y-0.5">
@@ -356,19 +525,15 @@ const CodeGraph = () => {
                   >
                     <span className="font-mono text-sm" style={{ color: T.accent }}>{nb.dir}</span>
                     <span className="flex-1 truncate font-mono text-[11px]">{nb.node.name}</span>
-                    <span
-                      className="rounded-full border px-1.5 py-0.5 font-mono text-[9px] uppercase"
-                      style={{ borderColor: T.border, color: T.muted }}
-                    >
+                    <span className="rounded-full border px-1.5 py-0.5 font-mono text-[9px] uppercase"
+                      style={{ borderColor: T.border, color: T.muted }}>
                       {nb.type}
                     </span>
                   </button>
                 </li>
               ))}
               {neighbors.length === 0 && (
-                <li className="px-2 py-2 font-mono text-xs" style={{ color: T.muted }}>
-                  No connections.
-                </li>
+                <li className="px-2 py-2 font-mono text-xs" style={{ color: T.muted }}>No connections.</li>
               )}
             </ul>
           </div>
@@ -378,12 +543,27 @@ const CodeGraph = () => {
   );
 };
 
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
 const MetaField = ({ label, value }: { label: string; value: React.ReactNode }) => (
   <div>
-    <div className="font-mono text-[9px] uppercase tracking-wider mb-0.5"
-      style={{ color: T.muted }}>{label}</div>
-    <div className="font-display text-base font-semibold"
-      style={{ color: T.ink }}>{value}</div>
+    <div className="font-mono text-[9px] uppercase tracking-wider mb-0.5" style={{ color: T.muted }}>{label}</div>
+    <div className="font-display text-base font-semibold" style={{ color: T.ink }}>{value}</div>
+  </div>
+);
+
+const NodeMetricRow = ({ label, value, tag, tagColor }: {
+  label: string; value: string; tag: string; tagColor: string;
+}) => (
+  <div className="flex items-center justify-between py-1 font-mono text-[10px]">
+    <span style={{ color: T.muted }}>{label}</span>
+    <div className="flex items-center gap-2">
+      <span style={{ color: T.ink }}>{value}</span>
+      <span className="rounded-full border px-1.5 py-0.5 text-[9px]"
+        style={{ borderColor: `${tagColor}40`, color: tagColor, background: `${tagColor}10` }}>
+        {tag}
+      </span>
+    </div>
   </div>
 );
 

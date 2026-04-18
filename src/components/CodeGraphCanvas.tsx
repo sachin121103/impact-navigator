@@ -11,6 +11,13 @@ import {
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, ZoomBehavior } from "d3-zoom";
 import type { GraphEdge, GraphNode, GraphPayload } from "@/lib/sample-graph";
+import {
+  type GraphMetrics,
+  betweennessColor,
+  clusteringColor,
+  pagerankColor,
+  percentileRank,
+} from "@/lib/graph-metrics";
 
 type SimNode = GraphNode & {
   x?: number; y?: number;
@@ -90,16 +97,54 @@ function toggle<T>(set: Set<T>, val: T): Set<T> {
   return next;
 }
 
+export type AnalysisMode = "none" | "pagerank" | "betweenness" | "clustering";
+
+// Resolve node fill colour based on active analysis overlay
+function analysisColor(
+  n: SimNode,
+  mode: AnalysisMode,
+  metrics: GraphMetrics | undefined,
+): string {
+  if (mode === "none" || !metrics) return NODE_COLOR[n.type];
+  if (mode === "pagerank") {
+    const pct = percentileRank(metrics.pagerank, n.id);
+    return pagerankColor(pct);
+  }
+  if (mode === "betweenness") {
+    const score = metrics.betweenness.get(n.id) ?? 0;
+    return betweennessColor(score);
+  }
+  if (mode === "clustering") {
+    const score = metrics.clustering.get(n.id) ?? 0;
+    return clusteringColor(score);
+  }
+  return NODE_COLOR[n.type];
+}
+
+// PageRank radius boost on top of degree-based radius
+function analysisRadius(n: SimNode, mode: AnalysisMode, metrics: GraphMetrics | undefined): number {
+  const base = nodeR(n);
+  if (mode === "pagerank" && metrics) {
+    const score = metrics.pagerank.get(n.id) ?? 0;
+    return base + score * 28;
+  }
+  return base;
+}
+
 export const CodeGraphCanvas = ({
   data,
   selectedId,
   onSelect,
   search = "",
+  metrics,
+  analysisMode = "none",
 }: {
   data: GraphPayload;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   search?: string;
+  metrics?: GraphMetrics;
+  analysisMode?: AnalysisMode;
 }) => {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const gRef = useRef<SVGGElement | null>(null);
@@ -447,17 +492,25 @@ export const CodeGraphCanvas = ({
           {/* Nodes */}
           <g>
             {nodes.map((n) => {
-              const r = nodeR(n);
+              const r = analysisRadius(n, analysisMode, metrics);
               const isSelected = selectedId === n.id;
               const isHovered = hoveredId === n.id;
               const isActive = isSelected || isHovered;
               const isDim = finalHighlight ? !finalHighlight.has(n.id) : false;
               const isMatch = searchMatches ? searchMatches.has(n.id) : false;
-              const color = NODE_COLOR[n.type];
+              const color = analysisColor(n, analysisMode, metrics);
               const showLabel =
                 n.type === "file" ? showFileLabels
                   : n.type === "class" ? showClassLabels
                     : showFnLabels;
+              // PageRank top-10%: outer glow ring
+              const prPct = analysisMode === "pagerank" && metrics
+                ? percentileRank(metrics.pagerank, n.id) : 0;
+              const isTopPR = prPct >= 0.9;
+              // Betweenness warning threshold
+              const btScore = analysisMode === "betweenness" && metrics
+                ? (metrics.betweenness.get(n.id) ?? 0) : 0;
+              const isBtWarn = btScore > 0.5;
 
               return (
                 <g
@@ -522,6 +575,17 @@ export const CodeGraphCanvas = ({
                       style={{ animation: "radar-pulse 2s ease-out infinite" }}
                     />
                   )}
+                  {/* PageRank top-10% outer pulse ring */}
+                  {isTopPR && !isActive && (
+                    <circle
+                      r={r + 14}
+                      fill="none"
+                      stroke="hsl(25,85%,42%)"
+                      strokeWidth={1}
+                      opacity={0.3}
+                      style={{ animation: "radar-pulse 2.8s ease-out infinite" }}
+                    />
+                  )}
                   {/* Node */}
                   <circle
                     r={r}
@@ -531,6 +595,15 @@ export const CodeGraphCanvas = ({
                     filter={isActive ? "url(#node-shadow-active)" : "url(#node-shadow)"}
                     opacity={isActive ? 1 : 0.88}
                   />
+                  {/* Betweenness warning icon */}
+                  {isBtWarn && (
+                    <text
+                      x={r + 2} y={-r - 2}
+                      fontSize={8} textAnchor="middle"
+                      fill="hsl(6,70%,48%)" opacity={0.85}
+                      style={{ pointerEvents: "none", userSelect: "none" }}
+                    >⚠</text>
+                  )}
                   {/* Label */}
                   {(showLabel || isActive) && (
                     <text
@@ -620,12 +693,18 @@ export const CodeGraphCanvas = ({
         className="absolute bottom-4 left-4 flex items-center gap-3 rounded-full border px-3 py-1.5 font-mono text-[10px] shadow-paper"
         style={{ ...GLASS, color: GLASS_MUTED }}
       >
-        <LegendDot color={NODE_COLOR.file} label="file" />
-        <LegendDot color={NODE_COLOR.class} label="class" />
-        <LegendDot color={NODE_COLOR.function} label="fn" />
-        <span className="h-3 w-px mx-1" style={{ background: GLASS_BORDER }} />
-        <LegendLine color={EDGE_COLOR.imports} solid label="imports" />
-        <LegendLine color={EDGE_COLOR.calls} solid={false} label="calls" />
+        {analysisMode === "none" ? (
+          <>
+            <LegendDot color={NODE_COLOR.file} label="file" />
+            <LegendDot color={NODE_COLOR.class} label="class" />
+            <LegendDot color={NODE_COLOR.function} label="fn" />
+            <span className="h-3 w-px mx-1" style={{ background: GLASS_BORDER }} />
+            <LegendLine color={EDGE_COLOR.imports} solid label="imports" />
+            <LegendLine color={EDGE_COLOR.calls} solid={false} label="calls" />
+          </>
+        ) : (
+          <MetricLegend mode={analysisMode} />
+        )}
       </div>
     </div>
   );
@@ -707,3 +786,37 @@ const LegendLine = ({ color, solid, label }: { color: string; solid: boolean; la
     {label}
   </span>
 );
+
+const METRIC_GRADIENT: Record<string, { stops: string[]; low: string; high: string }> = {
+  pagerank: {
+    stops: ["hsl(38,25%,72%)", "hsl(184,55%,44%)", "hsl(184,70%,30%)", "hsl(25,85%,42%)"],
+    low: "low influence",
+    high: "high influence",
+  },
+  betweenness: {
+    stops: ["hsl(142,38%,38%)", "hsl(32,88%,50%)", "hsl(6,70%,48%)"],
+    low: "no bottleneck",
+    high: "critical bridge",
+  },
+  clustering: {
+    stops: ["hsl(220,38%,44%)", "hsl(32,82%,44%)"],
+    low: "isolated",
+    high: "tightly coupled",
+  },
+};
+
+const MetricLegend = ({ mode }: { mode: string }) => {
+  const cfg = METRIC_GRADIENT[mode];
+  if (!cfg) return null;
+  const gradient = `linear-gradient(to right, ${cfg.stops.join(", ")})`;
+  return (
+    <span className="flex items-center gap-2">
+      <span className="font-mono text-[9px]" style={{ color: GLASS_MUTED }}>{cfg.low}</span>
+      <span
+        className="inline-block h-2 w-20 rounded-full"
+        style={{ background: gradient }}
+      />
+      <span className="font-mono text-[9px]" style={{ color: GLASS_MUTED }}>{cfg.high}</span>
+    </span>
+  );
+};
