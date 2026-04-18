@@ -112,7 +112,23 @@ export const CodeGraphCanvas = ({
       neighborMap.get(s.id)!.add(t.id);
       neighborMap.get(t.id)!.add(s.id);
     }
-    return { nodes, links, neighborMap };
+
+    // Compute zones (folder groupings) from file paths
+    const zoneMembers = new Map<string, SimNode[]>();
+    for (const n of nodes) {
+      const key = zoneKeyForFile(n.file);
+      if (!zoneMembers.has(key)) zoneMembers.set(key, []);
+      zoneMembers.get(key)!.push(n);
+    }
+    const zoneList = Array.from(zoneMembers.entries())
+      .map(([key, members]) => ({ key, members, hue: hashHue(key) }))
+      .sort((a, b) => b.members.length - a.members.length);
+    const zoneByNodeId = new Map<string, string>();
+    for (const z of zoneList) {
+      for (const m of z.members) zoneByNodeId.set(m.id, z.key);
+    }
+
+    return { nodes, links, neighborMap, zoneList, zoneByNodeId };
   }, [data]);
 
   // Resize observer
