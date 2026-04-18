@@ -266,6 +266,11 @@ const ImpactRadar = () => {
               {affected.slice(0, 15).map((sym) => (
                 <div key={sym.id} className="flex items-center gap-3 px-4 py-2 text-xs">
                   <span className={`shrink-0 ${RISK_CLASS[sym.risk]}`}>●</span>
+                  <span
+                    className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${RISK_CLASS[sym.risk]} border-current/30`}
+                  >
+                    {sym.risk === "medium" ? "MED" : sym.risk.toUpperCase()}
+                  </span>
                   <span className="font-mono text-foreground truncate">{sym.name}</span>
                   <span className="text-muted-foreground truncate flex-1 min-w-0">
                     {sym.file_path.split("/").slice(-2).join("/")}
