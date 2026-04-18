@@ -1,4 +1,4 @@
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useState } from "react";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -10,13 +10,12 @@ const PROMPTS = [
 ];
 
 interface Props {
-  value: string;
-  onChange: (v: string) => void;
-  onSubmit: () => void;
-  loading?: boolean;
+  onRunRadar?: (prompt: string) => void;
+  isLoading?: boolean;
 }
 
-export const ImpactInput = ({ value = "", onChange, onSubmit, loading }: Props) => {
+export const ImpactInput = ({ onRunRadar, isLoading = false }: Props) => {
+  const [value, setValue] = useState("");
   const [promptIdx, setPromptIdx] = useState(0);
 
   useEffect(() => {
@@ -25,25 +24,26 @@ export const ImpactInput = ({ value = "", onChange, onSubmit, loading }: Props) 
     return () => clearInterval(id);
   }, [value]);
 
-  const handle = (e: FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!loading && (value ?? "").trim()) onSubmit();
+    const prompt = value.trim() || PROMPTS[promptIdx];
+    if (!isLoading && onRunRadar) onRunRadar(prompt);
   };
 
   return (
     <form
-      onSubmit={handle}
+      onSubmit={handleSubmit}
       className="group relative flex items-center gap-2 rounded-lg border border-border bg-card pl-5 pr-2 py-2 shadow-paper transition-shadow focus-within:shadow-glow"
     >
       <span className="font-mono text-sm text-accent">›</span>
       <div className="relative flex-1">
         <input
           value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={loading}
+          onChange={(e) => setValue(e.target.value)}
+          disabled={isLoading}
           className="w-full bg-transparent py-2.5 font-mono text-[15px] text-foreground placeholder:text-transparent outline-none disabled:opacity-60"
-          placeholder="function name…"
-          aria-label="Function name to analyze"
+          placeholder="describe a change…"
+          aria-label="Describe the change you want to make"
         />
         {!value && (
           <div className="pointer-events-none absolute inset-0 flex items-center font-mono text-[15px] text-muted-foreground">
@@ -54,11 +54,11 @@ export const ImpactInput = ({ value = "", onChange, onSubmit, loading }: Props) 
           </div>
         )}
       </div>
-      <Button type="submit" variant="radar" size="sm" disabled={loading || !(value ?? "").trim()} className="shrink-0">
-        {loading ? (
+      <Button type="submit" variant="radar" size="sm" className="shrink-0" disabled={isLoading}>
+        {isLoading ? (
           <>
             <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-            Analyzing
+            Running…
           </>
         ) : (
           <>

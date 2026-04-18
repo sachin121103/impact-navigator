@@ -429,26 +429,39 @@ async function enrichWithGitMeta(
   const lastCommit: Record<string, string> = {};
   const churn: Record<string, number> = {};
 
+  const DETAIL_BATCH = 10;
   for (let page = 1; page <= 3; page++) {
     const url = `https://api.github.com/repos/${owner}/${name}/commits?per_page=100&page=${page}`;
     const r = await fetch(url, { headers });
     if (!r.ok) break;
     const list = (await r.json()) as Array<{ sha: string; commit: { author: { date: string } } }>;
     if (!list.length) break;
-    for (const c of list) {
-      const detail = await fetch(
-        `https://api.github.com/repos/${owner}/${name}/commits/${c.sha}`,
-        { headers },
+
+    // Fetch commit details in parallel batches to avoid 300 sequential API calls
+    for (let i = 0; i < list.length; i += DETAIL_BATCH) {
+      const batch = list.slice(i, i + DETAIL_BATCH);
+      const results = await Promise.all(
+        batch.map(async (c) => {
+          const res = await fetch(
+            `https://api.github.com/repos/${owner}/${name}/commits/${c.sha}`,
+            { headers },
+          );
+          if (!res.ok) return null;
+          return { meta: c, detail: (await res.json()) as { files?: Array<{ filename: string }> } };
+        }),
       );
-      if (!detail.ok) continue;
-      const d = (await detail.json()) as { files?: Array<{ filename: string }> };
-      const date = c.commit.author.date;
-      const ts = new Date(date).getTime();
-      for (const f of d.files ?? []) {
-        if (!(f.filename in lastCommit)) lastCommit[f.filename] = date.slice(0, 10);
-        if (ts >= cutoff) churn[f.filename] = (churn[f.filename] ?? 0) + 1;
+      for (const result of results) {
+        if (!result) continue;
+        const { meta, detail } = result;
+        const date = meta.commit.author.date;
+        const ts = new Date(date).getTime();
+        for (const f of detail.files ?? []) {
+          if (!(f.filename in lastCommit)) lastCommit[f.filename] = date.slice(0, 10);
+          if (ts >= cutoff) churn[f.filename] = (churn[f.filename] ?? 0) + 1;
+        }
       }
     }
+
     if (list.length < 100) break;
   }
 
