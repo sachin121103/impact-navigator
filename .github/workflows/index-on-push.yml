@@ -1,0 +1,70 @@
+# Re-indexes the repository in the Impact Radar database whenever code is pushed.
+# This keeps the symbols/edges tables fresh so radar queries never re-parse source.
+#
+# Setup (two steps):
+#   1. Add this file to the GitHub repo you want to analyze (e.g. your Python project).
+#   2. Add one GitHub Actions secret to that repo:
+#        SUPABASE_FUNCTION_URL  →  https://<project-ref>.supabase.co/functions/v1
+#
+# Optional — to protect the endpoint with a webhook secret:
+#   3. Add WEBHOOK_SECRET to both GitHub Actions secrets and Supabase edge-function secrets.
+#      index-repo will then verify HMAC-SHA256 on every inbound call.
+
+name: Re-index on push
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to index (defaults to the triggered branch)
+        required: false
+        default: ''
+
+jobs:
+  index:
+    name: Trigger impact-radar indexer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Index repository
+        env:
+          FUNCTION_URL: ${{ secrets.SUPABASE_FUNCTION_URL }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          BRANCH: ${{ inputs.branch || github.ref_name }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        run: |
+          if [ -z "$FUNCTION_URL" ]; then
+            echo "::error::SUPABASE_FUNCTION_URL secret is not set. Add it in Settings → Secrets → Actions."
+            exit 1
+          fi
+
+          PAYLOAD=$(printf '{"repoUrl":"%s","branch":"%s"}' "$REPO_URL" "$BRANCH")
+          EXTRA_HEADERS=""
+
+          # Sign the payload with HMAC-SHA256 if a secret is configured
+          if [ -n "$WEBHOOK_SECRET" ]; then
+            SIG="sha256=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')"
+            EXTRA_HEADERS="-H \"X-Hub-Signature-256: $SIG\""
+          fi
+
+          echo "Indexing $REPO_URL @ $BRANCH ..."
+          RESPONSE=$(eval curl -s -f -X POST \
+            "\"${FUNCTION_URL}/index-repo\"" \
+            -H '"Content-Type: application/json"' \
+            $EXTRA_HEADERS \
+            -d "\"$PAYLOAD\"")
+
+          echo "$RESPONSE" | python3 -m json.tool 2>/dev/null || echo "$RESPONSE"
+
+          # Fail the step if the indexer returned ok: false
+          echo "$RESPONSE" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          if not d.get('ok'):
+            print('Indexer error:', d.get('error', 'unknown'))
+            sys.exit(1)
+          print(f\"Indexed {d.get('symbols',0)} symbols, {d.get('edges',0)} edges in {d.get('durationMs',0)}ms\")
+          "

@@ -355,14 +355,49 @@ Deno.serve(async (req) => {
   );
 
   try {
-    const body = await req.json().catch(() => ({}));
-    const repoUrl: string = body.repoUrl ?? "https://github.com/psf/requests";
+    // Support both GitHub push webhook payloads and plain JSON API calls
+    let repoUrl: string;
+    let branchHint: string | undefined;
+    const githubEvent = req.headers.get("X-GitHub-Event");
+
+    if (githubEvent === "push") {
+      const rawBody = await req.text();
+
+      // Verify HMAC-SHA256 signature when WEBHOOK_SECRET is configured
+      const webhookSecret = Deno.env.get("WEBHOOK_SECRET");
+      if (webhookSecret) {
+        const sig = req.headers.get("X-Hub-Signature-256") ?? "";
+        const encoder = new TextEncoder();
+        const key = await crypto.subtle.importKey(
+          "raw", encoder.encode(webhookSecret),
+          { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+        );
+        const mac = await crypto.subtle.sign("HMAC", key, encoder.encode(rawBody));
+        const expected = "sha256=" + Array.from(new Uint8Array(mac))
+          .map((b) => b.toString(16).padStart(2, "0")).join("");
+        if (sig !== expected) {
+          return new Response(
+            JSON.stringify({ ok: false, error: "Invalid webhook signature" }),
+            { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+      }
+      const payload = JSON.parse(rawBody);
+      repoUrl = payload.repository?.html_url;
+      branchHint = (payload.ref ?? "refs/heads/main").replace("refs/heads/", "");
+      if (!repoUrl) throw new Error("Missing repository.html_url in push payload");
+    } else {
+      const body = await req.json().catch(() => ({}));
+      repoUrl = body.repoUrl ?? "https://github.com/psf/requests";
+      branchHint = body.branch; // undefined → resolved below via GitHub API
+    }
+
     const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+?)(?:\.git)?(?:\/)?$/);
     if (!match) throw new Error("Invalid GitHub URL");
     const [, owner, name] = match;
 
-    // Resolve real default branch via GitHub API; fall back to main → master
-    const branch: string = body.branch ?? (await resolveDefaultBranch(owner, name, "main"));
+    // Resolve default branch from GitHub API when not explicitly provided
+    const branch = branchHint ?? (await resolveDefaultBranch(owner, name, "main"));
 
     // Upsert repo row → indexing
     const { data: repoRow, error: repoErr } = await supabase
@@ -376,119 +411,117 @@ Deno.serve(async (req) => {
     if (repoErr || !repoRow) throw new Error(repoErr?.message || "Failed to create repo row");
     const repoId = (repoRow as any).id as string;
 
-    // Wipe previous data for this repo
-    await supabase.from("symbols").delete().eq("repo_id", repoId);
-
-    // Download tarball, with master fallback
-    let tarBytes: Uint8Array;
     try {
-      tarBytes = await fetchTarball(owner, name, branch);
-    } catch {
-      tarBytes = await fetchTarball(owner, name, "master");
-    }
-    await supabase.from("repos").update({ status_message: "Parsing source files…" }).eq("id", repoId);
+      // Wipe previous data for this repo
+      await supabase.from("symbols").delete().eq("repo_id", repoId);
 
-    const allSymbols: Symbol[] = [];
-    const allEdges: Edge[] = [];
-    const seenQn = new Set<string>();
-    let fileCount = 0;
-
-    for await (const file of walkSourceFiles(tarBytes)) {
-      fileCount++;
-      const { symbols, edges } = isCFamily(file.path)
-        ? extractCSymbolsAndCalls(file.path, file.content)
-        : extractSymbolsAndCalls(file.path, file.content);
-      for (const s of symbols) {
-        if (seenQn.has(s.qualified_name)) continue;
-        seenQn.add(s.qualified_name);
-        allSymbols.push(s);
-      }
-      allEdges.push(...edges);
-    }
-
-    // Insert symbols (chunked) and read back with IDs
-    await chunkInsert(
-      supabase,
-      "symbols",
-      allSymbols.map((s) => ({ ...s, repo_id: repoId })),
-    );
-    const { data: dbSymbols, error: symErr } = await supabase
-      .from("symbols")
-      .select("id, qualified_name, name")
-      .eq("repo_id", repoId);
-    if (symErr) throw symErr;
-
-    const idByQn = new Map<string, string>();
-    const idsByName = new Map<string, string[]>();
-    for (const s of dbSymbols!) {
-      idByQn.set((s as any).qualified_name, (s as any).id);
-      const arr = idsByName.get((s as any).name) ?? [];
-      arr.push((s as any).id);
-      idsByName.set((s as any).name, arr);
-    }
-
-    // Resolve edges: source by qualified name, target by short name (best-effort within repo)
-    const edgeRows: { repo_id: string; source_id: string; target_id: string; kind: string }[] = [];
-    const seenEdge = new Set<string>();
-    for (const e of allEdges) {
-      const sourceId = idByQn.get(e.source_qn);
-      if (!sourceId) continue;
-      const candidates = idsByName.get(e.target_name);
-      if (!candidates || candidates.length === 0) continue;
-      // If multiple, prefer functions/classes over modules; just take first deterministically
-      for (const targetId of candidates.slice(0, 1)) {
-        if (sourceId === targetId) continue;
-        const k = `${sourceId}|${targetId}|${e.kind}`;
-        if (seenEdge.has(k)) continue;
-        seenEdge.add(k);
-        edgeRows.push({ repo_id: repoId, source_id: sourceId, target_id: targetId, kind: e.kind });
-      }
-    }
-
-    await chunkInsert(supabase, "edges", edgeRows);
-
-    // Update fan-in / fan-out via SQL would be ideal; do a quick client-side aggregation
-    const fanIn = new Map<string, number>();
-    const fanOut = new Map<string, number>();
-    for (const e of edgeRows) {
-      fanOut.set(e.source_id, (fanOut.get(e.source_id) ?? 0) + 1);
-      fanIn.set(e.target_id, (fanIn.get(e.target_id) ?? 0) + 1);
-    }
-    // Bulk update in small batches
-    const updates: { id: string; fan_in: number; fan_out: number }[] = [];
-    for (const s of dbSymbols!) {
-      const id = (s as any).id;
-      updates.push({ id, fan_in: fanIn.get(id) ?? 0, fan_out: fanOut.get(id) ?? 0 });
-    }
-    for (let i = 0; i < updates.length; i += 200) {
-      const slice = updates.slice(i, i + 200);
-      await Promise.all(
-        slice.map((u) =>
-          supabase.from("symbols").update({ fan_in: u.fan_in, fan_out: u.fan_out }).eq("id", u.id),
-        ),
+      // Fetch HEAD commit SHA (best-effort; used for incremental re-index detection)
+      const shaRes = await fetch(
+        `https://api.github.com/repos/${owner}/${name}/commits/${branch}`,
+        { headers: { "User-Agent": "impact-radar-indexer", Accept: "application/vnd.github+json" } },
       );
+      const commitSha: string | null = shaRes.ok ? ((await shaRes.json()) as any).sha ?? null : null;
+
+      // Download tarball with master fallback
+      let tarball: Uint8Array;
+      try {
+        tarball = await fetchTarball(owner, name, branch);
+      } catch {
+        tarball = await fetchTarball(owner, name, "master");
+      }
+      await supabase.from("repos").update({ status_message: "Parsing source files…" }).eq("id", repoId);
+
+      const allSymbols: Symbol[] = [];
+      const allEdges: Edge[] = [];
+      const seenQn = new Set<string>();
+      let fileCount = 0;
+
+      for await (const file of walkSourceFiles(tarball)) {
+        fileCount++;
+        const { symbols, edges } = isCFamily(file.path)
+          ? extractCSymbolsAndCalls(file.path, file.content)
+          : extractSymbolsAndCalls(file.path, file.content);
+        for (const s of symbols) {
+          if (seenQn.has(s.qualified_name)) continue;
+          seenQn.add(s.qualified_name);
+          allSymbols.push(s);
+        }
+        allEdges.push(...edges);
+      }
+
+      // Insert symbols (chunked) and read back with IDs
+      await chunkInsert(
+        supabase,
+        "symbols",
+        allSymbols.map((s) => ({ ...s, repo_id: repoId })),
+      );
+      const { data: dbSymbols, error: symErr } = await supabase
+        .from("symbols")
+        .select("id, qualified_name, name")
+        .eq("repo_id", repoId);
+      if (symErr) throw symErr;
+
+      const idByQn = new Map<string, string>();
+      const idsByName = new Map<string, string[]>();
+      for (const s of dbSymbols!) {
+        idByQn.set((s as any).qualified_name, (s as any).id);
+        const arr = idsByName.get((s as any).name) ?? [];
+        arr.push((s as any).id);
+        idsByName.set((s as any).name, arr);
+      }
+
+      // Resolve edges: source by qualified name, target by short name (best-effort within repo)
+      const edgeRows: { repo_id: string; source_id: string; target_id: string; kind: string }[] = [];
+      const seenEdge = new Set<string>();
+      for (const e of allEdges) {
+        const sourceId = idByQn.get(e.source_qn);
+        if (!sourceId) continue;
+        const candidates = idsByName.get(e.target_name);
+        if (!candidates || candidates.length === 0) continue;
+        for (const targetId of candidates.slice(0, 1)) {
+          if (sourceId === targetId) continue;
+          const k = `${sourceId}|${targetId}|${e.kind}`;
+          if (seenEdge.has(k)) continue;
+          seenEdge.add(k);
+          edgeRows.push({ repo_id: repoId, source_id: sourceId, target_id: targetId, kind: e.kind });
+        }
+      }
+
+      await chunkInsert(supabase, "edges", edgeRows);
+
+      // Single SQL update for fan_in/fan_out — avoids N+1 round-trips
+      await (supabase as any).rpc("refresh_fan_counts", { p_repo_id: repoId });
+
+      await supabase.from("repos").update({
+        status: "ready",
+        status_message: null,
+        commit_sha: commitSha,
+        symbol_count: allSymbols.length,
+        edge_count: edgeRows.length,
+        file_count: fileCount,
+        indexed_at: new Date().toISOString(),
+      }).eq("id", repoId);
+
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          repoId,
+          files: fileCount,
+          symbols: allSymbols.length,
+          edges: edgeRows.length,
+          commitSha,
+          durationMs: Date.now() - startedAt,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    } catch (innerErr) {
+      // Mark the repo as failed so callers know not to query stale partial data
+      await supabase.from("repos").update({
+        status: "failed",
+        status_message: (innerErr as Error).message,
+      }).eq("id", repoId).catch(() => {});
+      throw innerErr;
     }
-
-    await supabase.from("repos").update({
-      status: "ready",
-      status_message: null,
-      symbol_count: allSymbols.length,
-      edge_count: edgeRows.length,
-      file_count: fileCount,
-      indexed_at: new Date().toISOString(),
-    }).eq("id", repoId);
-
-    return new Response(
-      JSON.stringify({
-        ok: true,
-        repoId,
-        files: fileCount,
-        symbols: allSymbols.length,
-        edges: edgeRows.length,
-        durationMs: Date.now() - startedAt,
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
   } catch (err) {
     console.error("Indexer error:", err);
     return new Response(

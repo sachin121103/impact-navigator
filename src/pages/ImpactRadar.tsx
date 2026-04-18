@@ -1,223 +1,326 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { Link } from "react-router-dom";
 import { SubPageShell } from "@/components/SubPageShell";
 import { ImpactInput } from "@/components/ImpactInput";
 import { RadarVisual } from "@/components/RadarVisual";
-import { ImpactRadarVisual, type Affected } from "@/components/ImpactRadarVisual";
-import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 
-interface AnalyzeResult {
-  repo: { id: string; owner: string; name: string };
-  target: {
-    id: string;
-    name: string;
-    qualified_name: string;
-    file_path: string;
-    line_number: number;
-    kind: string;
-  };
-  affected: (Affected & {
-    file_path: string;
-    line_number: number;
-    qualified_name: string;
-    kind: string;
-  })[];
-  summary: { high: number; med: number; low: number; total: number; depthMax: number };
-  duration_ms: number;
+type RiskLevel = "high" | "medium" | "low";
+
+interface AffectedSymbol {
+  id: string;
+  qualified_name: string;
+  name: string;
+  kind: string;
+  file_path: string;
+  line_number: number;
+  fan_in: number;
+  fan_out: number;
+  churn: number;
+  risk: RiskLevel;
+  depth: number;
 }
 
-const REPO_KEY = "meridian:lastRepo";
+interface RunResult {
+  runId: string | null;
+  resolvedSymbol: { qualified_name: string; name: string; kind: string };
+  affected: AffectedSymbol[];
+  summary: { high: number; medium: number; low: number; total: number };
+  durationMs: number;
+}
+
+type RadarState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "result"; data: RunResult };
+
+type RepoStatus =
+  | { state: "empty" }
+  | { state: "invalid" }
+  | { state: "checking" }
+  | { state: "not-found" }
+  | { state: "indexing" }
+  | { state: "ready"; symbolCount: number; edgeCount: number }
+  | { state: "failed"; message: string };
+
+const RISK_CLASS: Record<RiskLevel, string> = {
+  high: "text-risk-high",
+  medium: "text-risk-med",
+  low: "text-risk-low",
+};
+
+const isGitHubUrl = (url: string) =>
+  /^https?:\/\/github\.com\/[^/]+\/[^/\s]+/.test(url.trim());
 
 const ImpactRadar = () => {
-  const [repoUrl, setRepoUrl] = useState("");
-  const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<AnalyzeResult | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [repoUrl, setRepoUrl] = useState<string>(
+    () => localStorage.getItem("impact-radar-repo") ?? "",
+  );
+  const [repoStatus, setRepoStatus] = useState<RepoStatus>({ state: "empty" });
+  const [isIndexing, setIsIndexing] = useState(false);
+  const [radarState, setRadarState] = useState<RadarState>({ status: "idle" });
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const last = localStorage.getItem(REPO_KEY);
-    if (last) setRepoUrl(last);
-  }, []);
+    localStorage.setItem("impact-radar-repo", repoUrl);
+    setRadarState({ status: "idle" });
 
-  const runAnalyze = async () => {
-    if (!query.trim() || !repoUrl.trim()) {
-      setError("Repository and function name are required.");
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    setSelectedId(null);
-    localStorage.setItem(REPO_KEY, repoUrl);
+    if (!repoUrl.trim()) { setRepoStatus({ state: "empty" }); return; }
+    if (!isGitHubUrl(repoUrl)) { setRepoStatus({ state: "invalid" }); return; }
+
+    setRepoStatus({ state: "checking" });
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      const { data } = await supabase
+        .from("repos")
+        .select("status, status_message, symbol_count, edge_count")
+        .eq("url", repoUrl.trim())
+        .maybeSingle();
+
+      if (!data) {
+        setRepoStatus({ state: "not-found" });
+      } else if ((data as any).status === "ready") {
+        setRepoStatus({
+          state: "ready",
+          symbolCount: (data as any).symbol_count,
+          edgeCount: (data as any).edge_count,
+        });
+      } else if ((data as any).status === "indexing") {
+        setRepoStatus({ state: "indexing" });
+      } else if ((data as any).status === "failed") {
+        setRepoStatus({ state: "failed", message: (data as any).status_message ?? "Indexing failed" });
+      } else {
+        setRepoStatus({ state: "not-found" });
+      }
+    }, 600);
+
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [repoUrl]);
+
+  const handleIndexRepo = async () => {
+    setIsIndexing(true);
+    setRepoStatus({ state: "indexing" });
     try {
-      const { data, error: fnErr } = await supabase.functions.invoke("impact-analyze", {
-        body: { repoUrl, query },
+      const { data, error } = await supabase.functions.invoke("index-repo", {
+        body: { repoUrl: repoUrl.trim() },
       });
-      if (fnErr) throw new Error(fnErr.message);
-      if ((data as any)?.error) throw new Error((data as any).error);
-      setResult(data as AnalyzeResult);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Analysis failed.");
-      setResult(null);
+      if (error) throw new Error(error.message);
+      if (!(data as any)?.ok) throw new Error((data as any)?.error ?? "Indexing failed");
+      setRepoStatus({
+        state: "ready",
+        symbolCount: (data as any).symbols ?? 0,
+        edgeCount: (data as any).edges ?? 0,
+      });
+    } catch (err) {
+      setRepoStatus({ state: "failed", message: (err as Error).message });
     } finally {
-      setLoading(false);
+      setIsIndexing(false);
     }
   };
+
+  const handleRunRadar = async (prompt: string) => {
+    if (repoStatus.state !== "ready") {
+      setRadarState({
+        status: "error",
+        message:
+          repoStatus.state === "not-found" || repoStatus.state === "failed"
+            ? "Index the repo first using the button below."
+            : "Enter a valid GitHub repo URL first.",
+      });
+      return;
+    }
+    setRadarState({ status: "loading" });
+    try {
+      const { data, error } = await supabase.functions.invoke("run-radar", {
+        body: { prompt, repoUrl: repoUrl.trim() },
+      });
+      if (error) throw new Error(error.message);
+      if (!(data as any)?.ok) throw new Error((data as any)?.error ?? "Unknown error from run-radar");
+      setRadarState({ status: "result", data: data as RunResult });
+    } catch (err) {
+      setRadarState({ status: "error", message: (err as Error).message });
+    }
+  };
+
+  const affected = radarState.status === "result" ? radarState.data.affected : [];
+  const summary = radarState.status === "result" ? radarState.data.summary : null;
 
   return (
     <SubPageShell
       eyebrow="03 · impact radar"
       title="Impact Radar."
       tagline="What will I break?"
-      description="Type a function name from an indexed repo. Impact Radar walks the call graph upstream and ranks every dependent symbol by risk."
-      visual={
-        <div className="relative grid h-full w-full place-items-center">
-          <div className="w-[min(82vmin,780px)]">
-            {result ? (
-              <ImpactRadarVisual
-                targetName={result.target.name}
-                affected={result.affected}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-                depthMax={Math.max(1, result.summary.depthMax)}
-              />
-            ) : (
-              <div className={loading ? "opacity-40 transition-opacity" : ""}>
-                <RadarVisual />
-              </div>
-            )}
-          </div>
-          {loading && (
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-full border border-border/60 bg-card/80 px-4 py-1.5 font-mono text-xs text-muted-foreground shadow-paper backdrop-blur">
-              <Loader2 className="mr-2 inline h-3 w-3 animate-spin" />
-              Analyzing impact…
-            </div>
-          )}
-        </div>
-      }
-      legend={
-        result ? (
-          <span className="flex items-center gap-3">
-            <span className="text-risk-high">●</span> {result.summary.high} will break
-            <span className="text-border">·</span>
-            <span className="text-risk-med">●</span> {result.summary.med} review
-            <span className="text-border">·</span>
-            <span className="text-risk-low">●</span> {result.summary.low} safe
-          </span>
-        ) : (
-          <span className="flex items-center gap-3">
-            <span className="text-risk-high">●</span> high
-            <span className="text-border">·</span>
-            <span className="text-risk-med">●</span> medium
-            <span className="text-border">·</span>
-            <span className="text-risk-low">●</span> low
-          </span>
-        )
-      }
-      panel={
+      description="Describe a change in plain English. Impact Radar maps every downstream dependency, ranks them by risk, and tells you exactly which files will break."
+    >
+      <div className="grid items-start gap-12 lg:grid-cols-2">
+        {/* Left column */}
         <div>
-          <div className="mb-3">
-            <label className="mb-1.5 block font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-              repo
-            </label>
-            <Input
+          <ImpactInput
+            onRunRadar={handleRunRadar}
+            isLoading={radarState.status === "loading"}
+          />
+
+          {/* Repo URL input + status */}
+          <div className="mt-3 flex flex-wrap items-center gap-2 px-1">
+            <span className="font-mono text-xs text-muted-foreground">repo:</span>
+            <input
               value={repoUrl}
               onChange={(e) => setRepoUrl(e.target.value)}
-              placeholder="github.com/owner/repo"
-              className="h-9 border-border bg-card font-mono text-xs"
+              placeholder="https://github.com/owner/repo"
+              spellCheck={false}
+              className="rounded bg-secondary px-2 py-0.5 font-mono text-xs text-foreground outline-none focus:ring-1 focus:ring-ring w-64 placeholder:text-muted-foreground/50"
             />
+            <RepoStatusBadge status={repoStatus} />
+            {(repoStatus.state === "not-found" || repoStatus.state === "failed") && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 px-2 font-mono text-xs"
+                onClick={handleIndexRepo}
+                disabled={isIndexing}
+              >
+                {isIndexing ? (
+                  <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Indexing…</>
+                ) : (
+                  "Index repo"
+                )}
+              </Button>
+            )}
           </div>
 
-          <ImpactInput value={query} onChange={setQuery} onSubmit={runAnalyze} loading={loading} />
-
-          {error && (
-            <p className="mt-3 font-mono text-xs text-risk-high">⚠ {error}</p>
+          {radarState.status === "idle" && (
+            <div className="mt-8 flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-muted-foreground">
+              <Stat
+                value={repoStatus.state === "ready" ? String(repoStatus.symbolCount) : "—"}
+                label="symbols indexed"
+              />
+              <Stat
+                value={repoStatus.state === "ready" ? String(repoStatus.edgeCount) : "—"}
+                label="call edges"
+              />
+            </div>
           )}
 
-          {!result && !loading && !error && (
-            <p className="mt-3 px-1 font-mono text-[11px] text-muted-foreground">
-              Tip: paste any public GitHub repo URL and a function name. New repos are indexed automatically on first run (may take ~30s).
-            </p>
+          {radarState.status === "loading" && (
+            <div className="mt-8 text-sm text-muted-foreground font-mono animate-pulse">
+              Traversing call graph…
+            </div>
           )}
 
-          {result && (
-            <div className="mt-6">
-              <div className="mb-3 flex items-baseline justify-between">
-                <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                  impacted · {result.summary.total}
-                </p>
-                <span className="font-mono text-[10px] text-muted-foreground">
-                  {result.duration_ms}ms
+          {radarState.status === "error" && (
+            <div className="mt-8 rounded-md border border-risk-high/30 bg-risk-high/5 px-4 py-3 text-sm">
+              <span className="font-mono text-risk-high">error: </span>
+              <span className="text-foreground">{radarState.message}</span>
+            </div>
+          )}
+
+          {radarState.status === "result" && (
+            <div className="mt-6 space-y-4">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-mono text-muted-foreground">resolved:</span>
+                <code className="rounded bg-secondary px-2 py-0.5 font-mono text-foreground">
+                  {radarState.data.resolvedSymbol.qualified_name}
+                </code>
+                <span className="rounded border border-border px-1.5 py-0.5 font-mono text-muted-foreground">
+                  {radarState.data.resolvedSymbol.kind}
                 </span>
               </div>
-              <div className="max-h-[42vh] overflow-y-auto rounded-md border border-border/60 bg-card/60 backdrop-blur">
-                {result.affected.length === 0 && (
-                  <p className="px-4 py-6 text-center font-mono text-xs text-muted-foreground">
-                    Nothing depends on <span className="text-foreground">{result.target.name}</span>. Safe to change.
-                  </p>
-                )}
-                <ul className="divide-y divide-border/60">
-                  {result.affected.map((a) => (
-                    <li key={a.id}>
-                      <button
-                        onClick={() => setSelectedId(a.id === selectedId ? null : a.id)}
-                        className={`flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-secondary/60 ${
-                          selectedId === a.id ? "bg-secondary/80" : ""
-                        }`}
-                      >
-                        <span
-                          className={`h-2 w-2 shrink-0 rounded-full ${
-                            a.bucket === "high"
-                              ? "bg-risk-high"
-                              : a.bucket === "med"
-                                ? "bg-risk-med"
-                                : "bg-risk-low"
-                          }`}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-baseline gap-2">
-                            <span className="truncate font-mono text-xs font-medium text-foreground">
-                              {a.name}
-                            </span>
-                            <span className="font-mono text-[9px] uppercase text-muted-foreground">
-                              {a.kind}
-                            </span>
-                          </div>
-                          <div className="truncate font-mono text-[10px] text-muted-foreground">
-                            {a.file_path}:{a.line_number}
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">
-                            d{a.depth}
-                          </span>
-                          <div className="h-1 w-12 overflow-hidden rounded-full bg-secondary">
-                            <div
-                              className={`h-full ${
-                                a.bucket === "high"
-                                  ? "bg-risk-high"
-                                  : a.bucket === "med"
-                                    ? "bg-risk-med"
-                                    : "bg-risk-low"
-                              }`}
-                              style={{ width: `${Math.min(100, a.risk * 100)}%` }}
-                            />
-                          </div>
-                        </div>
-                      </button>
-                    </li>
+
+              <div className="rounded-md border border-border bg-card shadow-paper overflow-hidden">
+                <div className="px-4 py-2 border-b border-border text-xs font-mono text-muted-foreground">
+                  {radarState.data.summary.total} affected symbols
+                </div>
+                <div className="max-h-52 overflow-y-auto divide-y divide-border">
+                  {affected.slice(0, 15).map((sym) => (
+                    <div key={sym.id} className="flex items-center gap-3 px-4 py-2 text-xs">
+                      <span className={`shrink-0 ${RISK_CLASS[sym.risk]}`}>●</span>
+                      <span className="font-mono text-foreground truncate">{sym.name}</span>
+                      <span className="text-muted-foreground truncate flex-1 min-w-0">
+                        {sym.file_path.split("/").slice(-2).join("/")}
+                      </span>
+                      <span className="shrink-0 font-mono text-muted-foreground">d{sym.depth}</span>
+                    </div>
                   ))}
-                </ul>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-muted-foreground">
+                <Stat value={String(radarState.data.summary.total)} label="affected" />
+                <Stat value={`${radarState.data.durationMs}ms`} label="radar time" />
+                <button
+                  onClick={() => setRadarState({ status: "idle" })}
+                  className="font-mono text-xs underline underline-offset-2 hover:text-foreground transition-colors"
+                >
+                  reset
+                </button>
               </div>
             </div>
           )}
         </div>
-      }
-    />
+
+        {/* Right column */}
+        <div className="relative">
+          <RadarVisual results={affected.length > 0 ? affected : undefined} />
+          <div className="pointer-events-none absolute -bottom-4 left-1/2 -translate-x-1/2 rounded-md border border-border bg-card px-4 py-2.5 font-mono text-xs shadow-paper whitespace-nowrap">
+            {summary ? (
+              <>
+                <span className="text-risk-high">●</span> {summary.high} will break ·{" "}
+                <span className="text-risk-med">●</span> {summary.medium} review ·{" "}
+                <span className="text-risk-low">●</span> {summary.low} safe
+              </>
+            ) : radarState.status === "loading" ? (
+              <span className="text-muted-foreground animate-pulse">scanning…</span>
+            ) : (
+              <span className="text-muted-foreground">enter a repo to begin</span>
+            )}
+          </div>
+        </div>
+      </div>
+    </SubPageShell>
   );
 };
+
+const RepoStatusBadge = ({ status }: { status: RepoStatus }) => {
+  if (status.state === "empty" || status.state === "invalid") return null;
+  if (status.state === "checking") {
+    return (
+      <span className="flex items-center gap-1 font-mono text-xs text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" /> checking…
+      </span>
+    );
+  }
+  if (status.state === "indexing") {
+    return (
+      <span className="flex items-center gap-1 font-mono text-xs text-risk-med">
+        <Loader2 className="h-3 w-3 animate-spin" /> indexing…
+      </span>
+    );
+  }
+  if (status.state === "ready") {
+    return (
+      <span className="font-mono text-xs text-risk-low">
+        ● ready · {status.symbolCount} symbols
+      </span>
+    );
+  }
+  if (status.state === "not-found") {
+    return <span className="font-mono text-xs text-muted-foreground">● not indexed</span>;
+  }
+  if (status.state === "failed") {
+    return <span className="font-mono text-xs text-risk-high">● index failed</span>;
+  }
+  return null;
+};
+
+const Stat = ({ value, label }: { value: string; label: string }) => (
+  <div className="flex items-baseline gap-2">
+    <span className="font-display text-2xl font-semibold tracking-tight text-foreground">
+      {value}
+    </span>
+    <span className="font-mono text-xs uppercase tracking-wider">{label}</span>
+  </div>
+);
 
 export default ImpactRadar;

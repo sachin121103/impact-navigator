@@ -3,5 +3,5 @@ project_id = "pahubnxeiwqeubafqhuv"
 [functions.index-repo]
 verify_jwt = false
 
-[functions.impact-analyze]
+[functions.run-radar]
 verify_jwt = false
