@@ -5,16 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CodeGraphCanvas } from "@/components/CodeGraphCanvas";
 import { SAMPLE_GRAPH, type GraphPayload } from "@/lib/sample-graph";
+import { supabase } from "@/integrations/supabase/client";
 
 const CodeGraph = () => {
   const [data, setData] = useState<GraphPayload>(SAMPLE_GRAPH);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [repoInput, setRepoInput] = useState("");
-  const [backend, setBackend] = useState(
-    () => localStorage.getItem("meridian.backend") ?? "http://localhost:8000",
-  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [meta, setMeta] = useState<{ owner: string; name: string; branch: string; file_count: number } | null>(null);
 
   const stats = useMemo(() => {
     const files = data.nodes.filter((n) => n.type === "file").length;
