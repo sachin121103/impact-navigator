@@ -1,53 +1,58 @@
 
-## Sentinel Graph — replace Code Star
 
-A new page that turns the existing `/code-star` route into `/sentinel-graph`, with three connected features: a color-coded dependency graph, a BFS "ripple" impact analysis, and a Blast Radius Test Orchestrator.
+## Goal
+Drastically reduce lag on `/code-graph` (and similarly `/sentinel-graph`) for large repos by fixing the worst rendering and metric hotspots, while keeping the same visuals.
 
-### What gets built
+## Root causes (measured by code reading)
+1. **Re-render storm during simulation.** `setTickCount` every 80ms re-renders thousands of `<g>` nodes, `<line>` edges, zone rects, AND re-runs `visibleLabelIds` (O(n²) collision check) and `zoneRects`. Already mutating DOM directly via refs makes the React rerender pure waste.
+2. **`percentileRank` is O(n log n) per call**, and is called per-node twice per render (`analysisColor` + outer ring). Effectively O(n² log n) per render in PageRank mode.
+3. **`computeBetweenness` uses `queue.shift()`** (O(n)) inside Brandes → O(n³ log n) overall. Also `computeAllMetrics` re-walks adjacency 4× and `computeGraphStats` calls `computeBetweenness` again if not cached (it is, fine — but pagerank/betweenness still dominate).
+4. **`zoneRects` recomputed every tick** (~12×/s), iterating every node.
+5. **Per-node SVG filters** (`url(#node-shadow)`) on thousands of nodes are very expensive in browsers.
 
-**1. New page `src/pages/SentinelGraph.tsx`** (replaces `CodeStar.tsx`, route `/sentinel-graph`, with `/code-star` redirecting there). Nav link in `Index.tsx` updated from "Code Star" → "Sentinel Graph".
+## Approach (no UI changes)
 
-**2. Graph data layer `src/lib/sentinel-graph.ts`**
-- TypeScript types: `SGNode { id, label, kind: 'file'|'function'|'test', ext?: 'ts'|'tsx'|'js'|'py'|'css'|'other', path }`, `SGEdge { from, to, kind: 'imports'|'calls'|'covers' }`.
-- Built-in JSON sample (~25 nodes including 5 test nodes, realistic ts/py/css mix, one obvious dead file).
-- Helpers: `bfsDownstream(graph, startId)` → ordered array with depth, `findDeadNodes(graph)` → nodes with zero incoming non-test edges, `testsForBlast(graph, blastIds)` → unique test nodes whose `covers` edge lands in the blast set.
-- `estimateTestTime(tests)` — each test node carries an `avgMs` (seeded), full-suite total = sum of all tests; saved = full − selected.
+### A. Stop re-rendering during simulation
+- Remove `setTickCount` driven re-renders. Update zone rects and label positions via direct DOM mutation in the tick loop, the same way nodes/edges already are.
+- Keep one cheap rAF-throttled state update only when zoom changes (already separate).
+- Recompute `visibleLabelIds` and `zoneRects` only when: data changes, zoom crosses a threshold, selection/hover/search changes — never on every tick. Compute them on a debounced "simulation settled" callback (`alpha < 0.05`) plus on demand.
 
-**3. Graph canvas `src/components/SentinelGraphCanvas.tsx`** (SVG, no new deps)
-- Force-ish deterministic layout (seeded radial + small relaxation, similar approach to existing `CodeGraphCanvas`).
-- Node color by ext: ts/tsx = teal accent, py = amber, css = sage, test = ink with flask icon, other = muted. Dead nodes get a red ring + slow pulsing glow (`animate-pulse` + drop-shadow filter).
-- Edge styles: imports = thin solid, calls = dashed, covers (test→target) = dotted accent.
-- Click handler → sets `selectedId`, triggers Impact Mode.
-- Framer Motion ripple: on selection, render concentric `<motion.circle>` rings expanding from the node (scale 0→4, opacity 0.4→0, staggered by depth). Downstream nodes fade non-blast nodes to 20% opacity and pulse blast nodes in BFS depth order using `transition={{ delay: depth * 0.08 }}`.
-- Legend chip row at bottom (file types, dead, test, blast).
+### B. Cache percentile arrays
+- Precompute, once per `metrics` change: sorted pagerank values + an `id → percentile` Map, and store on the metrics object (or in a `useMemo` next to it). Replace `percentileRank(metrics.pagerank, n.id)` lookups with O(1) map reads.
 
-**4. Side panel (right column of `SubPageShell`'s `panel` slot)**
-- Three modes via tabs: **Overview**, **Impact**, **Blast Radius**.
-- Overview: counts (files, tests, dead nodes), "Toggle Dead Code Mode" switch (highlights dead in canvas).
-- Impact: shown when a node is selected. Lists downstream nodes grouped by depth with risk pill (depth 1 = HIGH, 2 = MED, 3+ = LOW), reusing the visual language from Impact Radar.
-- Blast Radius: "Mark as modified" button on selection → computes blast set + impacted tests. Shows:
-  - Test Execution Plan table (test name, file path, est. ms, covers count).
-  - Stats row: `X / Y tests` to run, `Estimated time` vs `Full suite`, `Time saved` (ms + %), with a thin progress bar.
-  - "Copy plan" button (copies test paths as a `pytest`/`vitest`-style command).
+### C. Faster Brandes
+- Replace `queue.shift()` with an index pointer (`while (head < queue.length)` `queue[head++]`). That alone makes betweenness ~10–50× faster on 500+ node graphs.
+- Avoid pre-seeding Maps with every id every iteration; use plain objects keyed by string and only set what's needed.
+- For graphs with N > ~600, sample sources (already done in stats; do same for betweenness with a configurable cap, e.g. 200 sources, then upscale).
 
-**5. Framer Motion** — already not in deps; install `framer-motion`. Use only for ripple rings and node fade/pulse — keep bundle impact small.
+### D. Drop heavy SVG filters at scale
+- For node count > 400, disable `url(#node-shadow)` on non-active nodes (use a flat `stroke` instead). Keep the active/hover shadow only on the focused node. This is the single biggest paint win.
+- Disable `edge-highlight` blur filter when N edges > 800.
 
-### Files
-- **add** `src/pages/SentinelGraph.tsx`
-- **add** `src/components/SentinelGraphCanvas.tsx`
-- **add** `src/lib/sentinel-graph.ts` (with embedded sample JSON)
-- **edit** `src/App.tsx` — add `/sentinel-graph` route, keep `/code-star` as redirect to `/sentinel-graph`
-- **edit** `src/pages/Index.tsx` — rename nav entry "Code Star" → "Sentinel Graph", update link target
-- **delete** `src/pages/CodeStar.tsx` (no longer referenced)
-- **add dep** `framer-motion`
+### E. Render budget
+- When `nodes.length > 1500`, hide labels entirely except for active/hover/search matches and top-N important. Also drop the per-node animated rings (cycle/orphan/PageRank pulse) for non-active nodes — keep the colour ring instead.
+- Skip rendering edges of type `contains` when N > 1000 (they add the most visual noise and DOM load with little signal).
 
-### Out of scope (this pass)
-- Real repo parsing for Sentinel Graph (uses curated JSON sample so the killer feature is demoable instantly). A "Paste repo" hookup to the existing `graph-meta` function can come next — noted but not built now.
-- Persisting modified-node selections across reloads.
-- Actually executing tests — the orchestrator outputs a plan only.
+### F. Move heavy metric compute off the main thread (optional, gated)
+- Wrap `computeAllMetrics` in a Web Worker (Vite supports `new Worker(new URL(...), { type: "module" })`). Show the graph immediately with `metrics = undefined`; populate when worker resolves. Cancel previous worker on new data.
+- This keeps the main thread responsive while metrics crunch.
 
-### Verification
-1. `/sentinel-graph` loads, graph renders with colored nodes; one dead file glows red.
-2. Click any node → ripple animates outward, downstream nodes pulse in order, Impact tab populates.
-3. Switch to Blast Radius tab → table lists only tests connected to the blast set, with time-saved stats matching `full − sum(selected)`.
-4. Toggle Dead Code Mode → red glow intensifies; non-dead nodes desaturate.
+## Files
+- **edit** `src/components/CodeGraphCanvas.tsx` — kill `setTickCount`, mutate zone rects/labels via refs, gate filters & rings by node count, cache percentile map.
+- **edit** `src/lib/graph-metrics.ts` — index-based BFS queue in Brandes, source-sampling for big N, expose `pagerankPercentile: Map<string, number>` on `GraphMetrics`.
+- **edit** `src/pages/CodeGraph.tsx` — wrap `computeAllMetrics` in a worker (`src/lib/metrics.worker.ts`), show partial UI while pending.
+- **add** `src/lib/metrics.worker.ts` — worker entry that imports from `graph-metrics.ts` and posts results back.
+- **edit** `src/components/SentinelGraphCanvas.tsx` — same scale gating (skip per-node animated rings beyond a threshold) so it stays smooth for bigger graphs too.
+
+## Verification
+1. Load `/code-graph`, paste a large repo (e.g. `vercel/next.js` subset or `facebook/react`), confirm:
+   - Initial layout still animates without UI freeze.
+   - Switching to **Influence / Bottleneck Risk** modes no longer hangs the tab.
+   - Pan/zoom stays at 60fps once simulation cools.
+2. `/sentinel-graph` still demos smoothly with sample data (no regression).
+3. Profile with `browser--performance_profile` before/after — confirm long-task count drops.
+
+## Out of scope
+- Switching to canvas/WebGL rendering (would be a much bigger rewrite — propose later if SVG ceiling is still hit at 5k+ nodes).
+- Server-side metric precomputation in `graph-meta`.
+
