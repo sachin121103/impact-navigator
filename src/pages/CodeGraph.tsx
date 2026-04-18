@@ -176,7 +176,7 @@ const CodeGraph = () => {
             ) : (
               <div>
                 <div className="mb-3 flex items-center gap-2">
-                  <NodeIcon type={selected.type} />
+                  <NodeTypeIcon type={selected.type} />
                   <span className="rounded bg-secondary px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
                     {selected.type}
                   </span>
@@ -190,8 +190,8 @@ const CodeGraph = () => {
 
                 {selected.type === "file" && (
                   <div className="mb-5 grid grid-cols-2 gap-3 rounded-md border border-border/70 bg-background/60 p-3 text-xs">
-                    <Meta label="LOC" value={selected.loc ?? "—"} />
-                    <Meta
+                    <MetaField label="LOC" value={selected.loc ?? "—"} />
+                    <MetaField
                       label="Churn (90d)"
                       value={selected.churn_score ?? 0}
                     />
@@ -254,7 +254,7 @@ const Stat = ({ n, label, small }: { n: number; label: string; small?: boolean }
   </div>
 );
 
-const Meta = ({ label, value }: { label: string; value: React.ReactNode }) => (
+const MetaField = ({ label, value }: { label: string; value: React.ReactNode }) => (
   <div>
     <div className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
       {label}
@@ -263,7 +263,7 @@ const Meta = ({ label, value }: { label: string; value: React.ReactNode }) => (
   </div>
 );
 
-const NodeIcon = ({ type }: { type: "file" | "function" | "class" }) => {
+const NodeTypeIcon = ({ type }: { type: "file" | "function" | "class" }) => {
   const cls = "h-4 w-4 text-accent";
   if (type === "file") return <FileCode className={cls} />;
   if (type === "class") return <Folder className={cls} />;
