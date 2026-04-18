@@ -544,13 +544,17 @@ export const CodeGraphCanvas = ({
         <g ref={gRef}>
           {/* Zone backgrounds */}
           <g pointerEvents="none">
-            {zoneRects.map((z) => {
+            {zoneDescriptors.map((z) => {
               const dim = finalHighlight && !z.members.some((m) => finalHighlight.has(m.id));
               const labelW = z.key.length * 5.6 + 14;
               return (
                 <g key={z.key} style={{ transition: "opacity 200ms" }} opacity={dim ? 0.2 : 1}>
                   <rect
-                    x={z.x} y={z.y} width={z.w} height={z.h}
+                    ref={(el) => {
+                      if (el) zoneRectRefs.current.set(z.key, el);
+                      else zoneRectRefs.current.delete(z.key);
+                    }}
+                    x={0} y={0} width={0} height={0}
                     rx={18} ry={18}
                     fill={`hsl(${z.hue},38%,92%,0.55)`}
                     stroke={`hsl(${z.hue},30%,65%)`}
@@ -558,26 +562,33 @@ export const CodeGraphCanvas = ({
                     strokeDasharray="4 5"
                     strokeOpacity={0.4}
                   />
-                  {/* Zone label pill */}
-                  <rect
-                    x={z.x + 8} y={z.y + 6}
-                    width={labelW} height={14}
-                    rx={7} ry={7}
-                    fill={PAPER_BG}
-                    fillOpacity={0.92}
-                    stroke={`hsl(${z.hue},30%,65%)`}
-                    strokeOpacity={0.35}
-                    strokeWidth={0.6}
-                  />
-                  <text
-                    x={z.x + 15} y={z.y + 16}
-                    fontSize={9} fontFamily="var(--font-mono)"
-                    fill={`hsl(${z.hue},35%,32%)`}
-                    opacity={0.85}
-                    style={{ textTransform: "uppercase", letterSpacing: "0.1em" }}
+                  {/* Zone label pill — translated as a group via ref */}
+                  <g
+                    ref={(el) => {
+                      if (el) zoneLabelRefs.current.set(z.key, el);
+                      else zoneLabelRefs.current.delete(z.key);
+                    }}
                   >
-                    {z.key}
-                  </text>
+                    <rect
+                      x={8} y={6}
+                      width={labelW} height={14}
+                      rx={7} ry={7}
+                      fill={PAPER_BG}
+                      fillOpacity={0.92}
+                      stroke={`hsl(${z.hue},30%,65%)`}
+                      strokeOpacity={0.35}
+                      strokeWidth={0.6}
+                    />
+                    <text
+                      x={15} y={16}
+                      fontSize={9} fontFamily="var(--font-mono)"
+                      fill={`hsl(${z.hue},35%,32%)`}
+                      opacity={0.85}
+                      style={{ textTransform: "uppercase", letterSpacing: "0.1em" }}
+                    >
+                      {z.key}
+                    </text>
+                  </g>
                 </g>
               );
             })}
