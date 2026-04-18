@@ -16,7 +16,6 @@ import {
   betweennessColor,
   clusteringColor,
   pagerankColor,
-  percentileRank,
 } from "@/lib/graph-metrics";
 
 type SimNode = GraphNode & {
@@ -109,7 +108,7 @@ function analysisColor(
 ): string {
   if (mode === "none" || !metrics) return NODE_COLOR[n.type];
   if (mode === "pagerank") {
-    const pct = percentileRank(metrics.pagerank, n.id);
+    const pct = metrics.pagerankPercentile.get(n.id) ?? 0;
     return pagerankColor(pct);
   }
   if (mode === "betweenness") {
