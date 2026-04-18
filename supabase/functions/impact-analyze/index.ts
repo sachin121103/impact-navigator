@@ -49,11 +49,11 @@ Deno.serve(async (req) => {
   const t0 = Date.now();
 
   // 1. Resolve repo (or auto-index if missing — Impact Radar is self-sufficient)
-  let repo: { id: string; status: string; owner: string; name: string } | null = null;
+  let repo: { id: string; status: string; owner: string; name: string; symbol_count?: number; file_count?: number } | null = null;
   if (body.repoId) {
     const { data } = await supabase
       .from("repos")
-      .select("id,status,owner,name")
+      .select("id,status,owner,name,symbol_count,file_count")
       .eq("id", body.repoId)
       .maybeSingle();
     repo = data;
@@ -61,7 +61,7 @@ Deno.serve(async (req) => {
     const url = normalizeRepoUrl(body.repoUrl);
     const { data: byUrl } = await supabase
       .from("repos")
-      .select("id,status,owner,name")
+      .select("id,status,owner,name,symbol_count,file_count")
       .ilike("url", url)
       .limit(1);
     repo = byUrl?.[0] ?? null;
@@ -71,7 +71,7 @@ Deno.serve(async (req) => {
       if (m) {
         const { data: byOwnerName } = await supabase
           .from("repos")
-          .select("id,status,owner,name")
+          .select("id,status,owner,name,symbol_count,file_count")
           .ilike("owner", m[1])
           .ilike("name", m[2])
           .limit(1);
@@ -79,19 +79,21 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Auto-index if still missing — no Code Graph required
-    if (!repo) {
+    const shouldAutoIndex = !repo || (repo.status === "ready" && (repo.symbol_count ?? 0) === 0 && (repo.file_count ?? 0) === 0);
+
+    if (shouldAutoIndex) {
       try {
         const indexRes = await supabase.functions.invoke("index-repo", {
           body: { repoUrl: body.repoUrl },
         });
         if (indexRes.error) throw new Error(indexRes.error.message);
-        const { data: justIndexed } = await supabase
+
+        const { data: refreshedRepo } = await supabase
           .from("repos")
-          .select("id,status,owner,name")
+          .select("id,status,owner,name,symbol_count,file_count")
           .ilike("url", url)
           .limit(1);
-        repo = justIndexed?.[0] ?? null;
+        repo = refreshedRepo?.[0] ?? null;
       } catch (e) {
         return json({
           error: `Could not auto-index repository: ${(e as Error).message}`,
@@ -102,7 +104,6 @@ Deno.serve(async (req) => {
 
   if (!repo) return json({ error: "Repository could not be resolved." }, 404);
 
-  // Poll until indexing finishes (index-repo runs async). Cap at ~110s.
   if (repo.status !== "ready") {
     const deadline = Date.now() + 110_000;
     while (Date.now() < deadline && repo && repo.status !== "ready") {
@@ -112,7 +113,7 @@ Deno.serve(async (req) => {
       await new Promise((r) => setTimeout(r, 2500));
       const { data: refreshed } = await supabase
         .from("repos")
-        .select("id,status,owner,name")
+        .select("id,status,owner,name,symbol_count,file_count")
         .eq("id", repo.id)
         .maybeSingle();
       repo = refreshed;
@@ -157,7 +158,7 @@ Deno.serve(async (req) => {
   }
   if (!target) {
     return json({
-      error: `No symbol matching "${query}" found in this repo. Note: the indexer currently only parses Python (.py) files.`,
+      error: `No symbol matching "${query}" found in this repo. Try a function name or qualified symbol from the indexed source files.`,
     }, 404);
   }
 
