@@ -1,52 +1,48 @@
 
 ## Goal
-Make Impact Radar actually work: user types a function name → backend resolves it in an indexed repo → returns ranked downstream callers → radar visualizes them.
+Group nodes visually by their top-level folder. Render a soft, lightly-coloured "zone" behind each folder's cluster of bubbles. Bubbles still float and connect as today — zones are a calm background layer.
 
 ## Approach
 
-### 1. New edge function `impact-analyze` (synchronous, fast)
-The earlier plan suggested background jobs, but BFS over the `edges` table is cheap (single SQL per depth, capped). Keep it synchronous for snappy UX.
+### 1. Derive folders from node paths
+For each node, take the directory of its `file` (e.g. `src/api/impact.py` → folder `src/api`). Use the **first 2 path segments** as the zone key (so `src/api/*` and `src/utils/*` are distinct zones, but a flat repo with just `src/*` still groups). Files at root get a `"root"` zone.
 
-Input: `{ repoUrl?, repoId?, query }`
+Assign each zone a stable, light pastel colour by hashing the folder string into a hue, then rendering at very low saturation/high lightness (e.g. `hsl(H 35% 92% / 0.55)` on the paper texture) so it reads as a tint, not a fill.
 
-Steps:
-1. Resolve `repo_id` from `repos` (by `id` or `url`). Require `status='ready'`. 404 otherwise.
-2. Resolve target symbol: exact match on `name` or `qualified_name` within repo → fallback `ilike '%query%'` → pick highest `fan_in`. 404 if none.
-3. **BFS upstream** (callers) up to depth 4, capped at 200 nodes total. Query `edges` where `target_id IN (frontier)` per level, dedupe, track `depth` and `edgeKind`.
-4. Fetch symbol metadata for collected ids.
-5. Score: `risk = 0.5*(1/depth) + 0.3*norm(fan_in) + 0.2*norm(churn)`. Bucket high>0.66 / med>0.33 / low.
-6. Persist row in `impact_runs` (best-effort).
-7. Return `{ target, affected[], summary:{high,med,low,total,depthMax} }`.
+### 2. Pull each zone together with d3 forces
+Replace the single global `forceX/forceY` (which centres everything) with **per-zone X/Y forces** anchored at zone centroids. Centroids are arranged on a grid (or a circle) around the canvas centre, sized by zone node count, so zones don't overlap heavily.
 
-CORS + zod validation + `verify_jwt=false` config block.
+```text
+   ┌─ src/api ─┐   ┌─ src/utils ─┐
+   │  • • •    │   │  • •        │
+   └───────────┘   └─────────────┘
+   ┌─ src ─────────────┐  ┌─ tests ─┐
+   │  • • • • •        │  │ • •     │
+   └───────────────────┘  └─────────┘
+```
 
-### 2. Frontend wiring
+Forces:
+- `forceX(zoneCx).strength(0.18)` and `forceY(zoneCy).strength(0.18)` per node based on its zone — strong enough to cluster, weak enough that `link` and `charge` still shape the layout.
+- Keep existing link/charge/collide forces unchanged.
+- Drop the global center force (zone forces replace it).
 
-**`ImpactInput.tsx`** — make controlled: add `value`, `onChange`, `onSubmit`, `loading` props. Disable + spinner when loading.
+### 3. Render zone hulls behind everything
+On every tick, compute each zone's bounding shape from its current node positions and draw it as the **first** child of the zoomed `<g>` (so it sits behind edges and nodes). Two options, picking the simpler:
 
-**`ImpactRadar.tsx`** — add state (`repoUrl`, `query`, `result`, `loading`, `error`):
-- Small repo URL field above prompt (persisted to `localStorage`).
-- Submit → `supabase.functions.invoke('impact-analyze', ...)`.
-- Right panel switches between: empty hint → loading → ranked list grouped High/Med/Low (name, file:line, depth chip, mini risk bar) → error message.
-- Legend pill shows real counts when result present.
+- **Rounded bounding rect with padding** (chosen): for each zone, compute min/max x,y of its nodes, expand by ~28px, render `<rect rx="20">` with the zone's pastel fill + 1px dashed border in a slightly darker tint. Add a tiny `<text>` label in the top-left of the rect with the folder name in mono uppercase.
 
-**New `ImpactRadarVisual.tsx`** — replaces decorative `RadarVisual` once a result exists:
-- 4 concentric rings = depth 1..4 (closest = most directly impacted).
-- Each affected symbol = dot at `angle = hash(id) % 360`, radius scales with `risk`, color by bucket (`--risk-high/med/low`).
-- Center node = target function (label below).
-- One-shot sweep animation on new result; pulse on highest-risk dot.
-- Hover dot ↔ highlight row in panel via shared `selectedId`.
+This is cheap, reads clearly, and avoids convex-hull jitter. (We can upgrade to `d3.polygonHull` later if requested.)
 
-### 3. States
-- No repo indexed → inline note "Index this repo on Code Graph first →".
-- No match → "No symbol matching `xxx` found".
-- Loading → dim radar + "Analyzing impact…" pill.
+### 4. Layering & interaction
+- Z-order inside `<g ref={gRef}>`: `zones` → `edges` → `nodes`.
+- Zones are non-interactive (`pointerEvents: none`) so clicks still hit nodes / empty canvas.
+- Highlight behaviour unchanged. When a node is selected, dim non-neighbour zones slightly (opacity 0.4 → 0.2) for focus.
+- Add a small toggle in the bottom-right controls: `▦` to show/hide zones (default on).
+
+### 5. Legend update
+Add a "zones · folders" hint to the legend, with 2-3 small coloured swatches for the most populated folders.
 
 ## Files
-- **new** `supabase/functions/impact-analyze/index.ts`
-- **new** `src/components/ImpactRadarVisual.tsx`
-- **edit** `src/components/ImpactInput.tsx`
-- **edit** `src/pages/ImpactRadar.tsx`
-- **edit** `supabase/config.toml` (add `[functions.impact-analyze] verify_jwt = false`)
+- **edit** `src/components/CodeGraphCanvas.tsx` — folder derivation, per-zone forces, zone rect rendering, toggle, layering.
 
-No DB migrations — all tables/RLS already in place.
+No backend, schema, or sample-data changes. Works for both the sample graph and live indexed repos.
