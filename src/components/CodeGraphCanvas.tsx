@@ -435,39 +435,29 @@ export const CodeGraphCanvas = ({
     return set;
   }, [zoneList]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const zoneRects = useMemo(() => {
+  // Stable zone descriptor list. Positions/sizes are mutated via refs in the
+  // sim tick loop — never recomputed on every React render.
+  const zoneDescriptors = useMemo(() => {
     if (!showZones) return [];
-    return zoneList.flatMap((z) => {
-      const pts = z.members.filter((m) => m.x != null && m.y != null);
-      if (!pts.length) return [];
-      const PAD = 32;
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const p of pts) {
-        const r = nodeR(p) + 2;
-        if (p.x! - r < minX) minX = p.x! - r;
-        if (p.y! - r < minY) minY = p.y! - r;
-        if (p.x! + r > maxX) maxX = p.x! + r;
-        if (p.y! + r > maxY) maxY = p.y! + r;
-      }
-      return [{ key: z.key, hue: z.hue, members: z.members,
-        x: minX - PAD, y: minY - PAD,
-        w: maxX - minX + PAD * 2, h: maxY - minY + PAD * 2 }];
-    });
-  }, [zoneList, showZones, tickCount]); // tickCount triggers positional recompute
+    return zoneList.map((z) => ({ key: z.key, hue: z.hue, members: z.members }));
+  }, [zoneList, showZones]);
 
   const showFileLabels = zoomLevel > 0.7;
   const showClassLabels = zoomLevel > 1.2;
   const showFnLabels = zoomLevel > 1.8;
 
-  // Per-tick label collision dedupe — produces set of node ids whose labels render
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Per-tick label collision dedupe — produces set of node ids whose labels render.
+  // Re-runs on data / selection / zoom / settled-layout — NOT every tick.
   const visibleLabelIds = useMemo(() => {
     const result = new Set<string>();
     type Box = { x: number; y: number; w: number; h: number };
     const placed: Box[] = [];
     const overlaps = (a: Box, b: Box) =>
       a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+    // At very high node counts, only show labels for active/hover/search +
+    // top-N important nodes.
+    const veryHeavy = nodes.length > VERY_HEAVY_NODE_COUNT;
 
     // Priority order: active > neighbours > important > zoom-threshold
     const ordered = [...nodes].sort((a, b) => {
@@ -491,7 +481,10 @@ export const CodeGraphCanvas = ({
         n.type === "file" ? showFileLabels
           : n.type === "class" ? showClassLabels
             : showFnLabels;
-      const eligible = isActive || inHighlight || importantIds.has(n.id) || zoomShow;
+      const baseEligible = isActive || inHighlight || importantIds.has(n.id) || zoomShow;
+      const eligible = veryHeavy
+        ? (isActive || inHighlight || importantIds.has(n.id))
+        : baseEligible;
       if (!eligible) continue;
 
       const text = n.type === "file" ? n.file.split("/").pop() ?? n.name : n.name;
@@ -506,7 +499,8 @@ export const CodeGraphCanvas = ({
       result.add(n.id);
     }
     return result;
-  }, [nodes, tickCount, activeId, finalHighlight, importantIds, showFileLabels, showClassLabels, showFnLabels, analysisMode, metrics]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, layoutVersion, activeId, finalHighlight, importantIds, showFileLabels, showClassLabels, showFnLabels, analysisMode, metrics]);
 
   return (
     <div className="relative h-full w-full texture-paper">
