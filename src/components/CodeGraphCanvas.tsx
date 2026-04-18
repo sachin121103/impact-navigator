@@ -71,7 +71,9 @@ interface PhysicsConfig {
   centerStrength: number;
 }
 
-const DEFAULT_PHYSICS: PhysicsConfig = { repel: -180, linkDistance: 80, centerStrength: 0.06 };
+const DEFAULT_PHYSICS: PhysicsConfig = { repel: -180, linkDistance: 110, centerStrength: 0.04 };
+
+const PAPER_BG = "hsl(38,36%,96%)";
 
 // Warm glass panels — matches the paper design system
 const GLASS: React.CSSProperties = {
