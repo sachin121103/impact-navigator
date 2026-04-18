@@ -782,46 +782,47 @@ export const CodeGraphCanvas = ({
                       strokeWidth={1.5}
                       filter={nodeFilter}
                       opacity={isActive ? 1 : 0.88}
-                  />
-                  {/* Betweenness warning icon */}
-                  {isBtWarn && (
-                    <text
-                      x={r + 2} y={-r - 2}
-                      fontSize={8} textAnchor="middle"
-                      fill="hsl(6,70%,48%)" opacity={0.85}
-                      style={{ pointerEvents: "none", userSelect: "none" }}
-                    >⚠</text>
-                  )}
-                  {/* Label with background pill */}
-                  {labelVisible && (
-                    <g style={{ pointerEvents: "none", transition: "opacity 200ms" }}>
-                      <rect
-                        x={r + 3}
-                        y={-fontSize / 2 - 2}
-                        width={labelW}
-                        height={fontSize + 4}
-                        rx={3}
-                        ry={3}
-                        fill={PAPER_BG}
-                        fillOpacity={isActive ? 0.95 : 0.85}
-                      />
+                    />
+                    {/* Betweenness warning icon */}
+                    {isBtWarn && (
                       <text
-                        x={r + 5}
-                        y={4}
-                        fontSize={fontSize}
-                        fontFamily="var(--font-mono)"
-                        fontWeight={isActive ? 600 : 400}
-                        fill={isActive ? GLASS_TEXT : "hsl(25,12%,28%)"}
-                        opacity={isActive ? 1 : 0.78}
-                        style={{ userSelect: "none" }}
-                      >
-                        {labelText}
-                      </text>
-                    </g>
-                  )}
-                </g>
-              );
-            })}
+                        x={r + 2} y={-r - 2}
+                        fontSize={8} textAnchor="middle"
+                        fill="hsl(6,70%,48%)" opacity={0.85}
+                        style={{ pointerEvents: "none", userSelect: "none" }}
+                      >⚠</text>
+                    )}
+                    {/* Label with background pill */}
+                    {labelVisible && (
+                      <g style={{ pointerEvents: "none", transition: "opacity 200ms" }}>
+                        <rect
+                          x={r + 3}
+                          y={-fontSize / 2 - 2}
+                          width={labelW}
+                          height={fontSize + 4}
+                          rx={3}
+                          ry={3}
+                          fill={PAPER_BG}
+                          fillOpacity={isActive ? 0.95 : 0.85}
+                        />
+                        <text
+                          x={r + 5}
+                          y={4}
+                          fontSize={fontSize}
+                          fontFamily="var(--font-mono)"
+                          fontWeight={isActive ? 600 : 400}
+                          fill={isActive ? GLASS_TEXT : "hsl(25,12%,28%)"}
+                          opacity={isActive ? 1 : 0.78}
+                          style={{ userSelect: "none" }}
+                        >
+                          {labelText}
+                        </text>
+                      </g>
+                    )}
+                  </g>
+                );
+              });
+            })()}
           </g>
         </g>
       </svg>
