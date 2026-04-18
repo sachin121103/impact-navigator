@@ -661,6 +661,7 @@ export const CodeGraphCanvas = ({
         <Btn onClick={resetZoom} label="Reset zoom" className="text-[9px]">⤧</Btn>
         <div className="my-0.5 h-px w-full" style={{ background: GLASS_BORDER }} />
         <Btn onClick={() => setShowZones((v) => !v)} label="Zones" active={showZones} className="text-[9px]">▦</Btn>
+        <Btn onClick={() => setFocusMode((v) => !v)} label="Focus mode (isolate selection)" active={focusMode} className="text-[11px]">◉</Btn>
         <Btn onClick={() => setShowSettings((v) => !v)} label="Settings" active={showSettings} className="text-[11px]">⚙</Btn>
       </div>
 
