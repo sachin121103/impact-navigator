@@ -538,10 +538,12 @@ export const CodeGraphCanvas = ({
               const isDim = finalHighlight ? !finalHighlight.has(n.id) : false;
               const isMatch = searchMatches ? searchMatches.has(n.id) : false;
               const color = NODE_COLOR[n.type];
-              const showLabel =
-                n.type === "file" ? showFileLabels
-                  : n.type === "class" ? showClassLabels
-                    : showFnLabels;
+              const labelVisible = visibleLabelIds.has(n.id);
+              const focusHide = focusMode && finalHighlight && isDim;
+              const nodeOpacity = focusHide ? 0.05 : isDim ? 0.15 : 1;
+              const labelText = n.type === "file" ? (n.file.split("/").pop() ?? n.name) : n.name;
+              const fontSize = isActive ? 10.5 : n.type === "file" ? 9 : 8;
+              const labelW = labelText.length * fontSize * 0.58 + 8;
 
               return (
                 <g
@@ -552,7 +554,7 @@ export const CodeGraphCanvas = ({
                   }}
                   style={{
                     cursor: "pointer",
-                    opacity: isDim ? 0.15 : 1,
+                    opacity: nodeOpacity,
                     transition: "opacity 150ms",
                   }}
                   onClick={(e) => {
@@ -615,20 +617,32 @@ export const CodeGraphCanvas = ({
                     filter={isActive ? "url(#node-shadow-active)" : "url(#node-shadow)"}
                     opacity={isActive ? 1 : 0.88}
                   />
-                  {/* Label */}
-                  {(showLabel || isActive) && (
-                    <text
-                      x={r + 5}
-                      y={4}
-                      fontSize={isActive ? 10.5 : n.type === "file" ? 9 : 8}
-                      fontFamily="var(--font-mono)"
-                      fontWeight={isActive ? 600 : 400}
-                      fill={isActive ? GLASS_TEXT : "hsl(25,12%,28%)"}
-                      opacity={isActive ? 1 : 0.72}
-                      style={{ pointerEvents: "none", userSelect: "none", transition: "opacity 200ms" }}
-                    >
-                      {n.type === "file" ? n.file.split("/").pop() : n.name}
-                    </text>
+                  {/* Label with background pill */}
+                  {labelVisible && (
+                    <g style={{ pointerEvents: "none", transition: "opacity 200ms" }}>
+                      <rect
+                        x={r + 3}
+                        y={-fontSize / 2 - 2}
+                        width={labelW}
+                        height={fontSize + 4}
+                        rx={3}
+                        ry={3}
+                        fill={PAPER_BG}
+                        fillOpacity={isActive ? 0.95 : 0.85}
+                      />
+                      <text
+                        x={r + 5}
+                        y={4}
+                        fontSize={fontSize}
+                        fontFamily="var(--font-mono)"
+                        fontWeight={isActive ? 600 : 400}
+                        fill={isActive ? GLASS_TEXT : "hsl(25,12%,28%)"}
+                        opacity={isActive ? 1 : 0.78}
+                        style={{ userSelect: "none" }}
+                      >
+                        {labelText}
+                      </text>
+                    </g>
                   )}
                 </g>
               );
