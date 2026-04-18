@@ -170,38 +170,55 @@ const ImpactRadar = () => {
 
   const panel = (
     <div>
+      {/* Step 1 — Repo URL */}
+      <div className="mb-4 rounded-lg border border-border bg-card p-4 shadow-paper">
+        <div className="mb-2 flex items-center justify-between">
+          <label htmlFor="repo-url" className="font-mono text-[11px] uppercase tracking-widest text-accent">
+            Step 1 · GitHub repository
+          </label>
+          <RepoStatusBadge status={repoStatus} />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-sm text-muted-foreground">›</span>
+          <input
+            id="repo-url"
+            value={repoUrl}
+            onChange={(e) => setRepoUrl(e.target.value)}
+            placeholder="https://github.com/owner/repo"
+            spellCheck={false}
+            className="flex-1 bg-transparent py-1.5 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground/50"
+          />
+          {(repoStatus.state === "not-found" || repoStatus.state === "failed") && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 shrink-0 px-2.5 font-mono text-xs"
+              onClick={handleIndexRepo}
+              disabled={isIndexing}
+            >
+              {isIndexing ? (
+                <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Indexing…</>
+              ) : (
+                "Index repo"
+              )}
+            </Button>
+          )}
+        </div>
+        {repoStatus.state === "invalid" && (
+          <p className="mt-2 font-mono text-[11px] text-risk-high">
+            expected format: https://github.com/owner/repo
+          </p>
+        )}
+      </div>
+
+      {/* Step 2 — Prompt */}
+      <p className="mb-2 px-1 font-mono text-[11px] uppercase tracking-widest text-accent">
+        Step 2 · describe a change
+      </p>
       <ImpactInput
         onRunRadar={handleRunRadar}
         isLoading={radarState.status === "loading"}
       />
-
-      {/* Repo URL input + status */}
-      <div className="mt-3 flex flex-wrap items-center gap-2 px-1">
-        <span className="font-mono text-xs text-muted-foreground">repo:</span>
-        <input
-          value={repoUrl}
-          onChange={(e) => setRepoUrl(e.target.value)}
-          placeholder="https://github.com/owner/repo"
-          spellCheck={false}
-          className="rounded bg-secondary px-2 py-0.5 font-mono text-xs text-foreground outline-none focus:ring-1 focus:ring-ring w-64 placeholder:text-muted-foreground/50"
-        />
-        <RepoStatusBadge status={repoStatus} />
-        {(repoStatus.state === "not-found" || repoStatus.state === "failed") && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-6 px-2 font-mono text-xs"
-            onClick={handleIndexRepo}
-            disabled={isIndexing}
-          >
-            {isIndexing ? (
-              <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Indexing…</>
-            ) : (
-              "Index repo"
-            )}
-          </Button>
-        )}
-      </div>
 
       {radarState.status === "idle" && (
         <div className="mt-8 flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-muted-foreground">
