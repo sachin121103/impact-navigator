@@ -197,6 +197,14 @@ const ImpactRadar = () => {
     <div>
       {/* Step 1 — Repo URL */}
       <div className="mb-4 rounded-lg border border-border bg-card p-4 shadow-paper">
+        {repoStatus.state === "ready" && repoStatus.language && (
+          <div className="mb-2 flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+            <span className="font-mono text-[10px] uppercase tracking-widest text-accent">
+              language · {repoStatus.language}
+            </span>
+          </div>
+        )}
         <div className="mb-2 flex items-center justify-between">
           <label htmlFor="repo-url" className="font-mono text-[11px] uppercase tracking-widest text-accent">
             Step 1 · GitHub repository
