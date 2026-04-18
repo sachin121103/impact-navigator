@@ -118,10 +118,18 @@ export const CodeGraphCanvas = ({
         "link",
         forceLink<SimNode, SimLink>(links)
           .id((d) => d.id)
-          .distance((l) => (l.type === "imports" ? 90 : 36))
-          .strength((l) => (l.type === "imports" ? 0.5 : 0.25)),
+          .distance((l) => {
+            if (l.type === "contains") return 18;
+            if (l.type === "imports") return 110;
+            return 50; // calls
+          })
+          .strength((l) => {
+            if (l.type === "contains") return 1.2;
+            if (l.type === "imports") return 0.45;
+            return 0.2; // calls
+          }),
       )
-      .force("charge", forceManyBody().strength(-110))
+      .force("charge", forceManyBody().strength(-140))
       .force(
         "collide",
         forceCollide<SimNode>().radius(
