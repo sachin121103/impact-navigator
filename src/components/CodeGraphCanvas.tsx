@@ -71,7 +71,9 @@ interface PhysicsConfig {
   centerStrength: number;
 }
 
-const DEFAULT_PHYSICS: PhysicsConfig = { repel: -180, linkDistance: 80, centerStrength: 0.06 };
+const DEFAULT_PHYSICS: PhysicsConfig = { repel: -180, linkDistance: 110, centerStrength: 0.04 };
+
+const PAPER_BG = "hsl(38,36%,96%)";
 
 // Warm glass panels — matches the paper design system
 const GLASS: React.CSSProperties = {
@@ -114,6 +116,7 @@ export const CodeGraphCanvas = ({
   const [tickCount, setTickCount] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [showZones, setShowZones] = useState(true);
+  const [focusMode, setFocusMode] = useState(false);
   const [nodeTypeFilters, setNodeTypeFilters] = useState<Set<NodeType>>(
     new Set(["file", "class", "function"]),
   );
@@ -209,7 +212,7 @@ export const CodeGraphCanvas = ({
           ),
       )
       .force("charge", forceManyBody().strength(physics.repel))
-      .force("collide", forceCollide<SimNode>().radius((d) => nodeR(d) + 8))
+      .force("collide", forceCollide<SimNode>().radius((d) => nodeR(d) + 14))
       .force(
         "x",
         forceX<SimNode>((d) => {
@@ -315,6 +318,23 @@ export const CodeGraphCanvas = ({
 
   const finalHighlight = searchMatches ?? highlight;
 
+  // Top-N most-connected nodes per zone get persistent labels
+  const importantIds = useMemo(() => {
+    const set = new Set<string>();
+    const limits: Record<NodeType, number> = { file: 3, class: 2, function: 1 };
+    for (const z of zoneList) {
+      const byType: Record<NodeType, SimNode[]> = { file: [], class: [], function: [] };
+      for (const m of z.members) byType[m.type].push(m);
+      (Object.keys(byType) as NodeType[]).forEach((t) => {
+        byType[t]
+          .sort((a, b) => (b.degree ?? 0) - (a.degree ?? 0))
+          .slice(0, limits[t])
+          .forEach((n) => set.add(n.id));
+      });
+    }
+    return set;
+  }, [zoneList]);
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const zoneRects = useMemo(() => {
     if (!showZones) return [];
@@ -336,9 +356,58 @@ export const CodeGraphCanvas = ({
     });
   }, [zoneList, showZones, tickCount]); // tickCount triggers positional recompute
 
-  const showFileLabels = zoomLevel > 0.5;
-  const showClassLabels = zoomLevel > 0.9;
-  const showFnLabels = zoomLevel > 1.4;
+  const showFileLabels = zoomLevel > 0.7;
+  const showClassLabels = zoomLevel > 1.2;
+  const showFnLabels = zoomLevel > 1.8;
+
+  // Per-tick label collision dedupe — produces set of node ids whose labels render
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const visibleLabelIds = useMemo(() => {
+    const result = new Set<string>();
+    type Box = { x: number; y: number; w: number; h: number };
+    const placed: Box[] = [];
+    const overlaps = (a: Box, b: Box) =>
+      a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+    // Priority order: active > neighbours > important > zoom-threshold
+    const ordered = [...nodes].sort((a, b) => {
+      const score = (n: SimNode) => {
+        if (activeId === n.id) return 1000;
+        if (finalHighlight?.has(n.id)) return 500;
+        if (importantIds.has(n.id)) return 100 + (n.degree ?? 0);
+        return n.degree ?? 0;
+      };
+      return score(b) - score(a);
+    });
+
+    for (const n of ordered) {
+      if (n.x == null || n.y == null) continue;
+      const isActive = activeId === n.id;
+      const inHighlight = finalHighlight?.has(n.id);
+      const isDim = finalHighlight ? !inHighlight : false;
+      if (isDim) continue; // hide dimmed labels entirely
+
+      const zoomShow =
+        n.type === "file" ? showFileLabels
+          : n.type === "class" ? showClassLabels
+            : showFnLabels;
+      const eligible = isActive || inHighlight || importantIds.has(n.id) || zoomShow;
+      if (!eligible) continue;
+
+      const text = n.type === "file" ? n.file.split("/").pop() ?? n.name : n.name;
+      const fontSize = isActive ? 10.5 : n.type === "file" ? 9 : 8;
+      const r = nodeR(n);
+      const w = text.length * fontSize * 0.58 + 8;
+      const h = fontSize + 4;
+      const box: Box = { x: n.x + r + 5, y: n.y - h / 2, w, h };
+
+      // Active labels always render, even if overlapping
+      if (!isActive && placed.some((p) => overlaps(p, box))) continue;
+      placed.push(box);
+      result.add(n.id);
+    }
+    return result;
+  }, [nodes, tickCount, activeId, finalHighlight, importantIds, showFileLabels, showClassLabels, showFnLabels]);
 
   return (
     <div className="relative h-full w-full texture-paper">
@@ -384,6 +453,7 @@ export const CodeGraphCanvas = ({
           <g pointerEvents="none">
             {zoneRects.map((z) => {
               const dim = finalHighlight && !z.members.some((m) => finalHighlight.has(m.id));
+              const labelW = z.key.length * 5.6 + 14;
               return (
                 <g key={z.key} style={{ transition: "opacity 200ms" }} opacity={dim ? 0.2 : 1}>
                   <rect
@@ -395,11 +465,22 @@ export const CodeGraphCanvas = ({
                     strokeDasharray="4 5"
                     strokeOpacity={0.4}
                   />
+                  {/* Label pill */}
+                  <rect
+                    x={z.x + 8} y={z.y + 6}
+                    width={labelW} height={14}
+                    rx={7} ry={7}
+                    fill={PAPER_BG}
+                    fillOpacity={0.92}
+                    stroke={`hsl(${z.hue},30%,65%)`}
+                    strokeOpacity={0.35}
+                    strokeWidth={0.6}
+                  />
                   <text
-                    x={z.x + 12} y={z.y + 18}
+                    x={z.x + 15} y={z.y + 16}
                     fontSize={9} fontFamily="var(--font-mono)"
-                    fill={`hsl(${z.hue},30%,36%)`}
-                    opacity={0.75}
+                    fill={`hsl(${z.hue},35%,32%)`}
+                    opacity={0.85}
                     style={{ textTransform: "uppercase", letterSpacing: "0.1em" }}
                   >
                     {z.key}
@@ -419,7 +500,10 @@ export const CodeGraphCanvas = ({
                 ? finalHighlight.has(s.id) && finalHighlight.has(t.id)
                 : true;
               const base = EDGE_BASE_OPACITY[l.type];
-              const opacity = isContains
+              const focusHide = focusMode && finalHighlight && !lit;
+              const opacity = focusHide
+                ? 0.03
+                : isContains
                 ? (finalHighlight ? (lit ? 0.15 : 0.02) : 0.1)
                 : lit
                   ? (finalHighlight ? Math.min(0.9, base * 1.6) : base)
@@ -454,10 +538,12 @@ export const CodeGraphCanvas = ({
               const isDim = finalHighlight ? !finalHighlight.has(n.id) : false;
               const isMatch = searchMatches ? searchMatches.has(n.id) : false;
               const color = NODE_COLOR[n.type];
-              const showLabel =
-                n.type === "file" ? showFileLabels
-                  : n.type === "class" ? showClassLabels
-                    : showFnLabels;
+              const labelVisible = visibleLabelIds.has(n.id);
+              const focusHide = focusMode && finalHighlight && isDim;
+              const nodeOpacity = focusHide ? 0.05 : isDim ? 0.15 : 1;
+              const labelText = n.type === "file" ? (n.file.split("/").pop() ?? n.name) : n.name;
+              const fontSize = isActive ? 10.5 : n.type === "file" ? 9 : 8;
+              const labelW = labelText.length * fontSize * 0.58 + 8;
 
               return (
                 <g
@@ -468,7 +554,7 @@ export const CodeGraphCanvas = ({
                   }}
                   style={{
                     cursor: "pointer",
-                    opacity: isDim ? 0.15 : 1,
+                    opacity: nodeOpacity,
                     transition: "opacity 150ms",
                   }}
                   onClick={(e) => {
@@ -531,20 +617,32 @@ export const CodeGraphCanvas = ({
                     filter={isActive ? "url(#node-shadow-active)" : "url(#node-shadow)"}
                     opacity={isActive ? 1 : 0.88}
                   />
-                  {/* Label */}
-                  {(showLabel || isActive) && (
-                    <text
-                      x={r + 5}
-                      y={4}
-                      fontSize={isActive ? 10.5 : n.type === "file" ? 9 : 8}
-                      fontFamily="var(--font-mono)"
-                      fontWeight={isActive ? 600 : 400}
-                      fill={isActive ? GLASS_TEXT : "hsl(25,12%,28%)"}
-                      opacity={isActive ? 1 : 0.72}
-                      style={{ pointerEvents: "none", userSelect: "none", transition: "opacity 200ms" }}
-                    >
-                      {n.type === "file" ? n.file.split("/").pop() : n.name}
-                    </text>
+                  {/* Label with background pill */}
+                  {labelVisible && (
+                    <g style={{ pointerEvents: "none", transition: "opacity 200ms" }}>
+                      <rect
+                        x={r + 3}
+                        y={-fontSize / 2 - 2}
+                        width={labelW}
+                        height={fontSize + 4}
+                        rx={3}
+                        ry={3}
+                        fill={PAPER_BG}
+                        fillOpacity={isActive ? 0.95 : 0.85}
+                      />
+                      <text
+                        x={r + 5}
+                        y={4}
+                        fontSize={fontSize}
+                        fontFamily="var(--font-mono)"
+                        fontWeight={isActive ? 600 : 400}
+                        fill={isActive ? GLASS_TEXT : "hsl(25,12%,28%)"}
+                        opacity={isActive ? 1 : 0.78}
+                        style={{ userSelect: "none" }}
+                      >
+                        {labelText}
+                      </text>
+                    </g>
                   )}
                 </g>
               );
@@ -563,6 +661,7 @@ export const CodeGraphCanvas = ({
         <Btn onClick={resetZoom} label="Reset zoom" className="text-[9px]">⤧</Btn>
         <div className="my-0.5 h-px w-full" style={{ background: GLASS_BORDER }} />
         <Btn onClick={() => setShowZones((v) => !v)} label="Zones" active={showZones} className="text-[9px]">▦</Btn>
+        <Btn onClick={() => setFocusMode((v) => !v)} label="Focus mode (isolate selection)" active={focusMode} className="text-[11px]">◉</Btn>
         <Btn onClick={() => setShowSettings((v) => !v)} label="Settings" active={showSettings} className="text-[11px]">⚙</Btn>
       </div>
 
