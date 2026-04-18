@@ -81,7 +81,7 @@ export const CodeGraphCanvas = ({
   const [showZones, setShowZones] = useState(true);
 
   // Compute degree per node (drives node size emphasis)
-  const { nodes, links, neighborMap } = useMemo(() => {
+  const { nodes, links, neighborMap, zoneList, zoneByNodeId } = useMemo(() => {
     const nodes: SimNode[] = data.nodes.map((n) => ({ ...n, degree: 0 }));
     const idx = new Map(nodes.map((n) => [n.id, n]));
     const links: SimLink[] = [];
