@@ -48,7 +48,7 @@ Deno.serve(async (req) => {
 
   const t0 = Date.now();
 
-  // 1. Resolve repo
+  // 1. Resolve repo (or auto-index if missing — Impact Radar is self-sufficient)
   let repo: { id: string; status: string; owner: string; name: string } | null = null;
   if (body.repoId) {
     const { data } = await supabase
@@ -59,7 +59,6 @@ Deno.serve(async (req) => {
     repo = data;
   } else if (body.repoUrl) {
     const url = normalizeRepoUrl(body.repoUrl);
-    // Try exact (case-insensitive) URL match first
     const { data: byUrl } = await supabase
       .from("repos")
       .select("id,status,owner,name")
@@ -67,7 +66,6 @@ Deno.serve(async (req) => {
       .limit(1);
     repo = byUrl?.[0] ?? null;
 
-    // Fallback: parse owner/name from the URL and match those
     if (!repo) {
       const m = url.match(/github\.com\/([^/]+)\/([^/]+)/i);
       if (m) {
@@ -80,11 +78,31 @@ Deno.serve(async (req) => {
         repo = byOwnerName?.[0] ?? null;
       }
     }
+
+    // Auto-index if still missing — no Code Graph required
+    if (!repo) {
+      try {
+        const indexRes = await supabase.functions.invoke("index-repo", {
+          body: { repoUrl: body.repoUrl },
+        });
+        if (indexRes.error) throw new Error(indexRes.error.message);
+        const { data: justIndexed } = await supabase
+          .from("repos")
+          .select("id,status,owner,name")
+          .ilike("url", url)
+          .limit(1);
+        repo = justIndexed?.[0] ?? null;
+      } catch (e) {
+        return json({
+          error: `Could not auto-index repository: ${(e as Error).message}`,
+        }, 502);
+      }
+    }
   }
 
-  if (!repo) return json({ error: "Repository not indexed. Map it on Code Graph first." }, 404);
+  if (!repo) return json({ error: "Repository could not be resolved." }, 404);
   if (repo.status !== "ready") {
-    return json({ error: `Repository is ${repo.status}, not ready yet.` }, 409);
+    return json({ error: `Repository is still ${repo.status}. Try again in a moment.` }, 409);
   }
 
   // 2. Resolve target symbol — exact name first, then qualified_name, then ilike fallback
