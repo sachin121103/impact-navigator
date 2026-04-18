@@ -12,9 +12,10 @@
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { Untar } from "jsr:@std/archive@0.224.3/untar";
+import tar from "npm:tar-stream@3.1.7";
 import { Buffer } from "node:buffer";
 import { gunzipSync } from "node:zlib";
+import { Readable } from "node:stream";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -166,36 +167,43 @@ async function fetchTarball(owner: string, repo: string, branch: string): Promis
 }
 
 async function* walkPythonFiles(tarBytes: Uint8Array) {
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(tarBytes);
-      controller.close();
-    },
-  });
-  const untar = new Untar(stream.getReader() as any);
-  for await (const entry of untar) {
-    if (entry.type !== "file") continue;
-    if (!entry.fileName.endsWith(".py")) continue;
-    if (entry.fileName.includes("/tests/") || entry.fileName.includes("/test_")) continue;
-    if (entry.fileName.includes("/.")) continue;
-    const chunks: Uint8Array[] = [];
-    const reader = entry.getReader?.() ?? null;
-    if (reader) {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) chunks.push(value);
+  const extract = tar.extract();
+  Readable.from(Buffer.from(tarBytes)).pipe(extract);
+
+  const queue: { path: string; content: string }[] = [];
+  let done = false;
+  let error: Error | null = null;
+  let resolveNext: (() => void) | null = null;
+  const wake = () => { if (resolveNext) { resolveNext(); resolveNext = null; } };
+
+  extract.on("entry", (header: any, stream: any, next: any) => {
+    const chunks: Buffer[] = [];
+    stream.on("data", (c: Buffer) => chunks.push(c));
+    stream.on("end", () => {
+      const path: string = header.name;
+      if (
+        header.type === "file" &&
+        path.endsWith(".py") &&
+        !path.includes("/tests/") &&
+        !path.includes("/test_") &&
+        !path.includes("/.")
+      ) {
+        queue.push({ path, content: Buffer.concat(chunks).toString("utf-8") });
+        wake();
       }
-    } else {
-      // fallback: read entry stream
-      for await (const c of entry as any) chunks.push(c);
-    }
-    const total = chunks.reduce((n, c) => n + c.byteLength, 0);
-    const merged = new Uint8Array(total);
-    let off = 0;
-    for (const c of chunks) { merged.set(c, off); off += c.byteLength; }
-    const text = new TextDecoder("utf-8", { fatal: false }).decode(merged);
-    yield { path: entry.fileName, content: text };
+      next();
+    });
+    stream.on("error", (e: Error) => { error = e; wake(); next(); });
+    stream.resume();
+  });
+  extract.on("finish", () => { done = true; wake(); });
+  extract.on("error", (e: Error) => { error = e; done = true; wake(); });
+
+  while (true) {
+    if (queue.length) { yield queue.shift()!; continue; }
+    if (error) throw error;
+    if (done) return;
+    await new Promise<void>((r) => { resolveNext = r; });
   }
 }
 
