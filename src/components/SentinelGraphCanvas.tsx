@@ -86,6 +86,9 @@ export const SentinelGraphCanvas = ({
   const positions = useMemo(() => layout(graph), [graph]);
   const dead = useMemo(() => new Set(findDeadNodes(graph).map((n) => n.id)), [graph]);
 
+  // Perf gating: at high node counts, drop expensive per-node animations.
+  const heavy = graph.nodes.length > 200;
+
   const blast = useMemo(() => {
     if (!selectedId) return new Map<string, number>();
     const m = new Map<string, number>();
@@ -201,17 +204,29 @@ export const SentinelGraphCanvas = ({
               }}
             >
               {showDead && (
-                <motion.circle
-                  cx={p.x}
-                  cy={p.y}
-                  r={r + 8}
-                  fill="none"
-                  stroke="hsl(0 75% 55%)"
-                  strokeWidth={1.4}
-                  filter="url(#deadGlow)"
-                  animate={{ opacity: [0.3, 0.85, 0.3] }}
-                  transition={{ duration: 2.2, repeat: Infinity }}
-                />
+                heavy ? (
+                  <circle
+                    cx={p.x}
+                    cy={p.y}
+                    r={r + 6}
+                    fill="none"
+                    stroke="hsl(0 75% 55%)"
+                    strokeWidth={1.4}
+                    opacity={0.7}
+                  />
+                ) : (
+                  <motion.circle
+                    cx={p.x}
+                    cy={p.y}
+                    r={r + 8}
+                    fill="none"
+                    stroke="hsl(0 75% 55%)"
+                    strokeWidth={1.4}
+                    filter="url(#deadGlow)"
+                    animate={{ opacity: [0.3, 0.85, 0.3] }}
+                    transition={{ duration: 2.2, repeat: Infinity }}
+                  />
+                )
               )}
               {isSelected && (
                 <circle

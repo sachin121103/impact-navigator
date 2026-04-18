@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -15,10 +15,10 @@ import { CodeGraphCanvas, type AnalysisMode } from "@/components/CodeGraphCanvas
 import { SAMPLE_GRAPH, type GraphPayload } from "@/lib/sample-graph";
 import {
   computeAllMetrics,
-  percentileRank,
   topN,
   type GraphMetrics,
 } from "@/lib/graph-metrics";
+import type { WorkerResponse } from "@/lib/metrics.worker";
 
 // ─── Shared styles ────────────────────────────────────────────────────────────
 const GLASS: React.CSSProperties = {
@@ -81,10 +81,65 @@ const CodeGraph = () => {
   const [hasLoadedRepo, setHasLoadedRepo] = useState(false);
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("none");
 
-  const metrics: GraphMetrics = useMemo(
-    () => computeAllMetrics(data.nodes, data.edges),
-    [data],
+  // Heavy metrics computed off the main thread via Web Worker.
+  // Falls back to inline compute if Worker unavailable (e.g. SSR).
+  const [metrics, setMetrics] = useState<GraphMetrics>(() =>
+    computeAllMetrics(SAMPLE_GRAPH.nodes, SAMPLE_GRAPH.edges),
   );
+  const [metricsLoading, setMetricsLoading] = useState(false);
+  const workerRef = useRef<Worker | null>(null);
+  const reqIdRef = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const reqId = ++reqIdRef.current;
+
+    // Spin up worker lazily.
+    if (!workerRef.current) {
+      try {
+        workerRef.current = new Worker(
+          new URL("@/lib/metrics.worker.ts", import.meta.url),
+          { type: "module" },
+        );
+      } catch {
+        workerRef.current = null;
+      }
+    }
+    const w = workerRef.current;
+    if (!w) {
+      // Fallback: synchronous compute.
+      setMetrics(computeAllMetrics(data.nodes, data.edges));
+      return;
+    }
+
+    setMetricsLoading(true);
+    const onMessage = (ev: MessageEvent<WorkerResponse>) => {
+      if (cancelled || ev.data.id !== reqId) return;
+      const r = ev.data;
+      setMetrics({
+        pagerank: new Map(r.pagerank),
+        pagerankPercentile: new Map(r.pagerankPercentile),
+        betweenness: new Map(r.betweenness),
+        clustering: new Map(r.clustering),
+        stats: r.stats,
+        cycles: {
+          cyclicNodeIds: new Set(r.cycles.cyclicNodeIds),
+          cycles: r.cycles.cycles,
+        },
+        orphans: { orphanIds: new Set(r.orphans.orphanIds) },
+      });
+      setMetricsLoading(false);
+    };
+    w.addEventListener("message", onMessage);
+    w.postMessage({ id: reqId, nodes: data.nodes, edges: data.edges });
+
+    return () => {
+      cancelled = true;
+      w.removeEventListener("message", onMessage);
+    };
+  }, [data]);
+
+  useEffect(() => () => workerRef.current?.terminate(), []);
 
   const stats = useMemo(() => ({
     files: data.nodes.filter((n) => n.type === "file").length,
@@ -555,7 +610,7 @@ const CodeGraph = () => {
                 <NodeMetricRow
                   label="PageRank"
                   value={(metrics.pagerank.get(selected.id) ?? 0).toFixed(4)}
-                  tag={`top ${Math.round((1 - percentileRank(metrics.pagerank, selected.id)) * 100)}%`}
+                  tag={`top ${Math.round((1 - (metrics.pagerankPercentile.get(selected.id) ?? 0)) * 100)}%`}
                   tagColor={T.accent}
                 />
                 <NodeMetricRow

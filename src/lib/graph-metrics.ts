@@ -11,6 +11,7 @@ export type OrphanInfo = {
 
 export type GraphMetrics = {
   pagerank: Map<string, number>;
+  pagerankPercentile: Map<string, number>;
   betweenness: Map<string, number>;
   clustering: Map<string, number>;
   stats: GraphStats;
@@ -75,65 +76,86 @@ export function computePageRank(
 
 // ─── Betweenness Centrality (Brandes) ────────────────────────────────────────
 // Undirected version. Normalised to [0,1].
+// Optimised: index-based queue (no .shift()), plain object maps, source sampling for big N.
 export function computeBetweenness(
   nodes: GraphNode[],
   edges: GraphEdge[],
+  maxSources = 200,
 ): Map<string, number> {
   const ids = nodes.map((n) => n.id);
   const N = ids.length;
   if (N < 3) return new Map(ids.map((id) => [id, 0]));
 
-  // build undirected adjacency
-  const adj = new Map<string, Set<string>>();
-  for (const id of ids) adj.set(id, new Set());
+  // build undirected adjacency as plain object (faster than Map for hot loops)
+  const adj: Record<string, string[]> = Object.create(null);
+  for (const id of ids) adj[id] = [];
   for (const e of edges) {
-    if (adj.has(e.source) && adj.has(e.target)) {
-      adj.get(e.source)!.add(e.target);
-      adj.get(e.target)!.add(e.source);
+    if (adj[e.source] && adj[e.target]) {
+      adj[e.source].push(e.target);
+      adj[e.target].push(e.source);
     }
   }
 
-  const bc = new Map<string, number>(ids.map((id) => [id, 0]));
+  const bc: Record<string, number> = Object.create(null);
+  for (const id of ids) bc[id] = 0;
 
-  for (const s of ids) {
+  // Sample sources for large graphs; scale up at end.
+  const sources = N > maxSources ? sampleNodes(ids, maxSources) : ids;
+  const scaleUp = N > maxSources ? N / sources.length : 1;
+
+  for (const s of sources) {
     const stack: string[] = [];
-    const pred = new Map<string, string[]>(ids.map((id) => [id, []]));
-    const sigma = new Map<string, number>(ids.map((id) => [id, 0]));
-    sigma.set(s, 1);
-    const dist = new Map<string, number>(ids.map((id) => [id, -1]));
-    dist.set(s, 0);
+    const pred: Record<string, string[]> = Object.create(null);
+    const sigma: Record<string, number> = Object.create(null);
+    const dist: Record<string, number> = Object.create(null);
+    sigma[s] = 1;
+    dist[s] = 0;
     const queue: string[] = [s];
+    let head = 0;
 
-    while (queue.length) {
-      const v = queue.shift()!;
+    while (head < queue.length) {
+      const v = queue[head++];
       stack.push(v);
-      for (const w of adj.get(v)!) {
-        if (dist.get(w) === -1) {
+      const dv = dist[v];
+      const sv = sigma[v];
+      const nbrs = adj[v];
+      for (let k = 0; k < nbrs.length; k++) {
+        const w = nbrs[k];
+        if (dist[w] === undefined) {
           queue.push(w);
-          dist.set(w, dist.get(v)! + 1);
+          dist[w] = dv + 1;
         }
-        if (dist.get(w) === dist.get(v)! + 1) {
-          sigma.set(w, sigma.get(w)! + sigma.get(v)!);
-          pred.get(w)!.push(v);
+        if (dist[w] === dv + 1) {
+          sigma[w] = (sigma[w] ?? 0) + sv;
+          (pred[w] ??= []).push(v);
         }
       }
     }
 
-    const delta = new Map<string, number>(ids.map((id) => [id, 0]));
+    const delta: Record<string, number> = Object.create(null);
     while (stack.length) {
       const w = stack.pop()!;
-      for (const v of pred.get(w)!) {
-        const c = (sigma.get(v)! / sigma.get(w)!) * (1 + delta.get(w)!);
-        delta.set(v, delta.get(v)! + c);
+      const ps = pred[w];
+      if (ps) {
+        const factor = (1 + (delta[w] ?? 0)) / sigma[w];
+        for (let k = 0; k < ps.length; k++) {
+          const v = ps[k];
+          delta[v] = (delta[v] ?? 0) + sigma[v] * factor;
+        }
       }
-      if (w !== s) bc.set(w, bc.get(w)! + delta.get(w)!);
+      if (w !== s) bc[w] += (delta[w] ?? 0) * scaleUp;
     }
   }
 
   // normalise
   const maxPairs = (N - 1) * (N - 2) / 2;
-  if (maxPairs > 0) for (const [id, v] of bc) bc.set(id, v / (2 * maxPairs));
-  return bc;
+  const out = new Map<string, number>();
+  if (maxPairs > 0) {
+    for (const id of ids) out.set(id, bc[id] / (2 * maxPairs));
+  } else {
+    for (const id of ids) out.set(id, 0);
+  }
+  return out;
 }
 
 // ─── Clustering Coefficient ───────────────────────────────────────────────────
@@ -340,13 +362,34 @@ export function computeAllMetrics(
   const cycles = detectCycles(nodes, edges);
   const orphans = detectOrphans(nodes, edges);
   const stats = computeGraphStats(nodes, edges, betweenness, cycles);
-  return { pagerank, betweenness, clustering, stats, cycles, orphans };
+  const pagerankPercentile = buildPercentileMap(pagerank);
+  return { pagerank, pagerankPercentile, betweenness, clustering, stats, cycles, orphans };
+}
+
+// Build an O(1) percentile lookup map from a value map.
+export function buildPercentileMap(map: Map<string, number>): Map<string, number> {
+  const sorted = [...map.values()].sort((a, b) => a - b);
+  const N = sorted.length;
+  const out = new Map<string, number>();
+  for (const [id, val] of map) {
+    let lo = 0, hi = N;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (sorted[mid] < val) lo = mid + 1;
+      else hi = mid;
+    }
+    out.set(id, N > 1 ? lo / (N - 1) : 0);
+  }
+  return out;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function sampleNodes(ids: string[], n: number): string[] {
-  const step = Math.floor(ids.length / n);
-  return ids.filter((_, i) => i % step === 0).slice(0, n);
+  if (ids.length <= n) return ids;
+  const step = ids.length / n;
+  const out: string[] = [];
+  for (let i = 0; i < n; i++) out.push(ids[Math.floor(i * step)]);
+  return out;
 }
 
 // Interpolate between two HSL stops

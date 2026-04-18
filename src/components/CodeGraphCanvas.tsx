@@ -16,7 +16,6 @@ import {
   betweennessColor,
   clusteringColor,
   pagerankColor,
-  percentileRank,
 } from "@/lib/graph-metrics";
 
 type SimNode = GraphNode & {
@@ -109,7 +108,7 @@ function analysisColor(
 ): string {
   if (mode === "none" || !metrics) return NODE_COLOR[n.type];
   if (mode === "pagerank") {
-    const pct = percentileRank(metrics.pagerank, n.id);
+    const pct = metrics.pagerankPercentile.get(n.id) ?? 0;
     return pagerankColor(pct);
   }
   if (mode === "betweenness") {
@@ -154,11 +153,14 @@ export const CodeGraphCanvas = ({
   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const nodeRefs = useRef<Map<string, SVGGElement>>(new Map());
   const linkRefs = useRef<Map<string, SVGLineElement>>(new Map());
+  const zoneRectRefs = useRef<Map<string, SVGRectElement>>(new Map());
+  const zoneLabelRefs = useRef<Map<string, SVGGElement>>(new Map());
 
   const [size, setSize] = useState({ w: 800, h: 640 });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [zoomLevel, setZoomLevel] = useState(1);
-  const [tickCount, setTickCount] = useState(0);
+  // Bumped only on simulation settle / data change — NOT every tick.
+  const [layoutVersion, setLayoutVersion] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [showZones, setShowZones] = useState(true);
   const [focusMode, setFocusMode] = useState(false);
@@ -169,6 +171,11 @@ export const CodeGraphCanvas = ({
     new Set(["imports", "calls", "include", "contains"]),
   );
   const [physics, setPhysics] = useState<PhysicsConfig>(DEFAULT_PHYSICS);
+
+  // Scale-based perf gating
+  const HEAVY_NODE_COUNT = 400;
+  const VERY_HEAVY_NODE_COUNT = 1500;
+  const HEAVY_EDGE_COUNT = 800;
 
   const { nodes, links, neighborMap, zoneList, zoneByNodeId } = useMemo(() => {
     const visibleNodes = data.nodes.filter((n) => nodeTypeFilters.has(n.type));
@@ -275,7 +282,42 @@ export const CodeGraphCanvas = ({
       .alpha(1)
       .alphaDecay(0.025);
 
+    // Build zone-member index once per (re-)build for fast bbox recompute.
+    const zoneMembersByKey = new Map<string, SimNode[]>();
+    for (const z of zoneList) zoneMembersByKey.set(z.key, z.members);
+
     let lastZone = 0;
+    let settledTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const updateZoneRects = () => {
+      if (!showZones) return;
+      const PAD = 32;
+      for (const [key, members] of zoneMembersByKey) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        let any = false;
+        for (const p of members) {
+          if (p.x == null || p.y == null) continue;
+          const r = nodeR(p) + 2;
+          any = true;
+          if (p.x - r < minX) minX = p.x - r;
+          if (p.y - r < minY) minY = p.y - r;
+          if (p.x + r > maxX) maxX = p.x + r;
+          if (p.y + r > maxY) maxY = p.y + r;
+        }
+        if (!any) continue;
+        const x = minX - PAD, y = minY - PAD;
+        const w = maxX - minX + PAD * 2, h = maxY - minY + PAD * 2;
+        const rect = zoneRectRefs.current.get(key);
+        if (rect) {
+          rect.setAttribute("x", String(x));
+          rect.setAttribute("y", String(y));
+          rect.setAttribute("width", String(w));
+          rect.setAttribute("height", String(h));
+        }
+        const lbl = zoneLabelRefs.current.get(key);
+        if (lbl) lbl.setAttribute("transform", `translate(${x},${y})`);
+      }
+    };
 
     sim.on("tick", () => {
       for (const n of nodes) {
@@ -301,16 +343,29 @@ export const CodeGraphCanvas = ({
         el.setAttribute("y2", String(t.y - (dy / dist) * tr));
       }
       const now = Date.now();
-      if (now - lastZone > 80) {
+      if (now - lastZone > 120) {
         lastZone = now;
-        setTickCount((n) => n + 1);
+        updateZoneRects();
+      }
+
+      // Trigger a single React rerender after the simulation cools — this is
+      // when label collision dedupe is recomputed.
+      if (settledTimer) clearTimeout(settledTimer);
+      if (sim.alpha() < 0.05) {
+        settledTimer = setTimeout(() => {
+          updateZoneRects();
+          setLayoutVersion((v) => v + 1);
+        }, 200);
       }
     });
 
     simRef.current = sim;
-    return () => { sim.stop(); };
+    return () => {
+      sim.stop();
+      if (settledTimer) clearTimeout(settledTimer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, links, size.w, size.h, zoneAnchors, zoneByNodeId, physics]);
+  }, [nodes, links, size.w, size.h, zoneAnchors, zoneByNodeId, physics, showZones, zoneList]);
 
   useEffect(() => {
     if (!svgRef.current || !gRef.current) return;
@@ -380,39 +435,29 @@ export const CodeGraphCanvas = ({
     return set;
   }, [zoneList]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const zoneRects = useMemo(() => {
+  // Stable zone descriptor list. Positions/sizes are mutated via refs in the
+  // sim tick loop — never recomputed on every React render.
+  const zoneDescriptors = useMemo(() => {
     if (!showZones) return [];
-    return zoneList.flatMap((z) => {
-      const pts = z.members.filter((m) => m.x != null && m.y != null);
-      if (!pts.length) return [];
-      const PAD = 32;
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const p of pts) {
-        const r = nodeR(p) + 2;
-        if (p.x! - r < minX) minX = p.x! - r;
-        if (p.y! - r < minY) minY = p.y! - r;
-        if (p.x! + r > maxX) maxX = p.x! + r;
-        if (p.y! + r > maxY) maxY = p.y! + r;
-      }
-      return [{ key: z.key, hue: z.hue, members: z.members,
-        x: minX - PAD, y: minY - PAD,
-        w: maxX - minX + PAD * 2, h: maxY - minY + PAD * 2 }];
-    });
-  }, [zoneList, showZones, tickCount]); // tickCount triggers positional recompute
+    return zoneList.map((z) => ({ key: z.key, hue: z.hue, members: z.members }));
+  }, [zoneList, showZones]);
 
   const showFileLabels = zoomLevel > 0.7;
   const showClassLabels = zoomLevel > 1.2;
   const showFnLabels = zoomLevel > 1.8;
 
-  // Per-tick label collision dedupe — produces set of node ids whose labels render
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Per-tick label collision dedupe — produces set of node ids whose labels render.
+  // Re-runs on data / selection / zoom / settled-layout — NOT every tick.
   const visibleLabelIds = useMemo(() => {
     const result = new Set<string>();
     type Box = { x: number; y: number; w: number; h: number };
     const placed: Box[] = [];
     const overlaps = (a: Box, b: Box) =>
       a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+    // At very high node counts, only show labels for active/hover/search +
+    // top-N important nodes.
+    const veryHeavy = nodes.length > VERY_HEAVY_NODE_COUNT;
 
     // Priority order: active > neighbours > important > zoom-threshold
     const ordered = [...nodes].sort((a, b) => {
@@ -436,7 +481,10 @@ export const CodeGraphCanvas = ({
         n.type === "file" ? showFileLabels
           : n.type === "class" ? showClassLabels
             : showFnLabels;
-      const eligible = isActive || inHighlight || importantIds.has(n.id) || zoomShow;
+      const baseEligible = isActive || inHighlight || importantIds.has(n.id) || zoomShow;
+      const eligible = veryHeavy
+        ? (isActive || inHighlight || importantIds.has(n.id))
+        : baseEligible;
       if (!eligible) continue;
 
       const text = n.type === "file" ? n.file.split("/").pop() ?? n.name : n.name;
@@ -451,7 +499,8 @@ export const CodeGraphCanvas = ({
       result.add(n.id);
     }
     return result;
-  }, [nodes, tickCount, activeId, finalHighlight, importantIds, showFileLabels, showClassLabels, showFnLabels, analysisMode, metrics]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, layoutVersion, activeId, finalHighlight, importantIds, showFileLabels, showClassLabels, showFnLabels, analysisMode, metrics]);
 
   return (
     <div className="relative h-full w-full texture-paper">
@@ -495,13 +544,17 @@ export const CodeGraphCanvas = ({
         <g ref={gRef}>
           {/* Zone backgrounds */}
           <g pointerEvents="none">
-            {zoneRects.map((z) => {
+            {zoneDescriptors.map((z) => {
               const dim = finalHighlight && !z.members.some((m) => finalHighlight.has(m.id));
               const labelW = z.key.length * 5.6 + 14;
               return (
                 <g key={z.key} style={{ transition: "opacity 200ms" }} opacity={dim ? 0.2 : 1}>
                   <rect
-                    x={z.x} y={z.y} width={z.w} height={z.h}
+                    ref={(el) => {
+                      if (el) zoneRectRefs.current.set(z.key, el);
+                      else zoneRectRefs.current.delete(z.key);
+                    }}
+                    x={0} y={0} width={0} height={0}
                     rx={18} ry={18}
                     fill={`hsl(${z.hue},38%,92%,0.55)`}
                     stroke={`hsl(${z.hue},30%,65%)`}
@@ -509,26 +562,33 @@ export const CodeGraphCanvas = ({
                     strokeDasharray="4 5"
                     strokeOpacity={0.4}
                   />
-                  {/* Zone label pill */}
-                  <rect
-                    x={z.x + 8} y={z.y + 6}
-                    width={labelW} height={14}
-                    rx={7} ry={7}
-                    fill={PAPER_BG}
-                    fillOpacity={0.92}
-                    stroke={`hsl(${z.hue},30%,65%)`}
-                    strokeOpacity={0.35}
-                    strokeWidth={0.6}
-                  />
-                  <text
-                    x={z.x + 15} y={z.y + 16}
-                    fontSize={9} fontFamily="var(--font-mono)"
-                    fill={`hsl(${z.hue},35%,32%)`}
-                    opacity={0.85}
-                    style={{ textTransform: "uppercase", letterSpacing: "0.1em" }}
+                  {/* Zone label pill — translated as a group via ref */}
+                  <g
+                    ref={(el) => {
+                      if (el) zoneLabelRefs.current.set(z.key, el);
+                      else zoneLabelRefs.current.delete(z.key);
+                    }}
                   >
-                    {z.key}
-                  </text>
+                    <rect
+                      x={8} y={6}
+                      width={labelW} height={14}
+                      rx={7} ry={7}
+                      fill={PAPER_BG}
+                      fillOpacity={0.92}
+                      stroke={`hsl(${z.hue},30%,65%)`}
+                      strokeOpacity={0.35}
+                      strokeWidth={0.6}
+                    />
+                    <text
+                      x={15} y={16}
+                      fontSize={9} fontFamily="var(--font-mono)"
+                      fill={`hsl(${z.hue},35%,32%)`}
+                      opacity={0.85}
+                      style={{ textTransform: "uppercase", letterSpacing: "0.1em" }}
+                    >
+                      {z.key}
+                    </text>
+                  </g>
                 </g>
               );
             })}
@@ -540,6 +600,9 @@ export const CodeGraphCanvas = ({
               const s = l.source as SimNode;
               const t = l.target as SimNode;
               const isContains = l.type === "contains";
+              // Skip "contains" edges entirely on very large graphs — they add the
+              // most DOM with the least signal.
+              if (isContains && nodes.length > 1000) return null;
               const lit = finalHighlight
                 ? finalHighlight.has(s.id) && finalHighlight.has(t.id)
                 : true;
@@ -552,6 +615,7 @@ export const CodeGraphCanvas = ({
                 : lit
                   ? (finalHighlight ? Math.min(0.9, base * 1.6) : base)
                   : (finalHighlight ? 0.04 : base * 0.5);
+              const useEdgeFilter = lit && !isContains && links.length <= HEAVY_EDGE_COUNT;
               return (
                 <line
                   key={i}
@@ -565,7 +629,7 @@ export const CodeGraphCanvas = ({
                   strokeDasharray={l.type === "calls" ? "4 3" : undefined}
                   opacity={opacity}
                   markerEnd={!isContains ? `url(#arrow-${l.type})` : undefined}
-                  filter={lit && !isContains ? "url(#edge-highlight)" : undefined}
+                  filter={useEdgeFilter ? "url(#edge-highlight)" : undefined}
                   style={{ transition: "opacity 150ms" }}
                 />
               );
@@ -574,176 +638,191 @@ export const CodeGraphCanvas = ({
 
           {/* Nodes */}
           <g>
-            {nodes.map((n) => {
-              const r = analysisRadius(n, analysisMode, metrics);
-              const isSelected = selectedId === n.id;
-              const isHovered = hoveredId === n.id;
-              const isActive = isSelected || isHovered;
-              const isDim = finalHighlight ? !finalHighlight.has(n.id) : false;
-              const isMatch = searchMatches ? searchMatches.has(n.id) : false;
-              const color = analysisColor(n, analysisMode, metrics);
-              const labelVisible = visibleLabelIds.has(n.id);
-              const focusHide = focusMode && finalHighlight && isDim;
-              const nodeOpacity = focusHide ? 0.05 : isDim ? 0.15 : 1;
-              const labelText = n.type === "file" ? (n.file.split("/").pop() ?? n.name) : n.name;
-              const fontSize = isActive ? 10.5 : n.type === "file" ? 9 : 8;
-              const labelW = labelText.length * fontSize * 0.58 + 8;
-              // PageRank top-10%: outer glow ring
-              const prPct = analysisMode === "pagerank" && metrics
-                ? percentileRank(metrics.pagerank, n.id) : 0;
-              const isTopPR = prPct >= 0.9;
-              // Betweenness warning threshold
-              const btScore = analysisMode === "betweenness" && metrics
-                ? (metrics.betweenness.get(n.id) ?? 0) : 0;
-              const isBtWarn = btScore > 0.5;
-              // Structural anomalies — always visible regardless of mode
-              const isCyclic = metrics?.cycles.cyclicNodeIds.has(n.id) ?? false;
-              const isOrphan = metrics?.orphans.orphanIds.has(n.id) ?? false;
+            {(() => {
+              const heavy = nodes.length > HEAVY_NODE_COUNT;
+              const veryHeavy = nodes.length > VERY_HEAVY_NODE_COUNT;
+              return nodes.map((n) => {
+                const r = analysisRadius(n, analysisMode, metrics);
+                const isSelected = selectedId === n.id;
+                const isHovered = hoveredId === n.id;
+                const isActive = isSelected || isHovered;
+                const isDim = finalHighlight ? !finalHighlight.has(n.id) : false;
+                const isMatch = searchMatches ? searchMatches.has(n.id) : false;
+                const color = analysisColor(n, analysisMode, metrics);
+                const labelVisible = visibleLabelIds.has(n.id);
+                const focusHide = focusMode && finalHighlight && isDim;
+                const nodeOpacity = focusHide ? 0.05 : isDim ? 0.15 : 1;
+                const labelText = n.type === "file" ? (n.file.split("/").pop() ?? n.name) : n.name;
+                const fontSize = isActive ? 10.5 : n.type === "file" ? 9 : 8;
+                const labelW = labelText.length * fontSize * 0.58 + 8;
+                // PageRank top-10%: outer glow ring
+                const prPct = analysisMode === "pagerank" && metrics
+                  ? (metrics.pagerankPercentile.get(n.id) ?? 0) : 0;
+                const isTopPR = prPct >= 0.9;
+                // Betweenness warning threshold
+                const btScore = analysisMode === "betweenness" && metrics
+                  ? (metrics.betweenness.get(n.id) ?? 0) : 0;
+                const isBtWarn = btScore > 0.5;
+                // Structural anomalies — always visible regardless of mode
+                const isCyclic = metrics?.cycles.cyclicNodeIds.has(n.id) ?? false;
+                const isOrphan = metrics?.orphans.orphanIds.has(n.id) ?? false;
 
-              return (
-                <g
-                  key={n.id}
-                  ref={(el) => {
-                    if (el) nodeRefs.current.set(n.id, el as SVGGElement);
-                    else nodeRefs.current.delete(n.id);
-                  }}
-                  style={{
-                    cursor: "pointer",
-                    opacity: nodeOpacity,
-                    transition: "opacity 150ms",
-                  }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSelect(n.id === selectedId ? null : n.id);
-                  }}
-                  onMouseEnter={() => setHoveredId(n.id)}
-                  onMouseLeave={() => setHoveredId(null)}
-                  onMouseDown={(e) => {
-                    const sim = simRef.current;
-                    if (!sim || !svgRef.current) return;
-                    const pt = svgRef.current.createSVGPoint();
-                    const ctm = (gRef.current as SVGGElement).getScreenCTM()!;
-                    sim.alphaTarget(0.3).restart();
-                    n.fx = n.x; n.fy = n.y;
-                    const move = (ev: MouseEvent) => {
-                      pt.x = ev.clientX; pt.y = ev.clientY;
-                      const p = pt.matrixTransform(ctm.inverse());
-                      n.fx = p.x; n.fy = p.y;
-                    };
-                    const up = () => {
-                      sim.alphaTarget(0);
-                      n.fx = null; n.fy = null;
-                      window.removeEventListener("mousemove", move);
-                      window.removeEventListener("mouseup", up);
-                    };
-                    window.addEventListener("mousemove", move);
-                    window.addEventListener("mouseup", up);
-                    e.preventDefault();
-                  }}
-                >
-                  {/* Selection / hover ring */}
-                  {isActive && (
-                    <circle
-                      r={r + 10}
-                      fill="none"
-                      stroke={color}
-                      strokeWidth={1.2}
-                      opacity={0.35}
-                      style={{ animation: isSelected ? "radar-pulse 2.4s ease-out infinite" : undefined }}
-                    />
-                  )}
-                  {/* Search match ring */}
-                  {isMatch && !isActive && (
-                    <circle
-                      r={r + 7}
-                      fill="none"
-                      stroke="hsl(32,82%,44%)"
-                      strokeWidth={1.2}
-                      opacity={0.6}
-                      style={{ animation: "radar-pulse 2s ease-out infinite" }}
-                    />
-                  )}
-                  {/* PageRank top-10% outer pulse ring */}
-                  {isTopPR && !isActive && (
-                    <circle
-                      r={r + 14}
-                      fill="none"
-                      stroke="hsl(25,85%,42%)"
-                      strokeWidth={1}
-                      opacity={0.3}
-                      style={{ animation: "radar-pulse 2.8s ease-out infinite" }}
-                    />
-                  )}
-                  {/* Cycle ring — red dashed, always visible */}
-                  {isCyclic && !isActive && (
-                    <circle
-                      r={r + 6}
-                      fill="none"
-                      stroke="hsl(6,72%,50%)"
-                      strokeWidth={1.2}
-                      strokeDasharray="3 2"
-                      opacity={0.65}
-                    />
-                  )}
-                  {/* Orphan ring — grey dotted, always visible */}
-                  {isOrphan && !isCyclic && !isActive && (
-                    <circle
-                      r={r + 4}
-                      fill="none"
-                      stroke="hsl(25,10%,62%)"
-                      strokeWidth={1}
-                      strokeDasharray="2 2"
-                      opacity={0.5}
-                    />
-                  )}
-                  {/* Node */}
-                  <circle
-                    r={r}
-                    fill={color}
-                    stroke={PAPER_BG}
-                    strokeWidth={1.5}
-                    filter={isActive ? "url(#node-shadow-active)" : "url(#node-shadow)"}
-                    opacity={isActive ? 1 : 0.88}
-                  />
-                  {/* Betweenness warning icon */}
-                  {isBtWarn && (
-                    <text
-                      x={r + 2} y={-r - 2}
-                      fontSize={8} textAnchor="middle"
-                      fill="hsl(6,70%,48%)" opacity={0.85}
-                      style={{ pointerEvents: "none", userSelect: "none" }}
-                    >⚠</text>
-                  )}
-                  {/* Label with background pill */}
-                  {labelVisible && (
-                    <g style={{ pointerEvents: "none", transition: "opacity 200ms" }}>
-                      <rect
-                        x={r + 3}
-                        y={-fontSize / 2 - 2}
-                        width={labelW}
-                        height={fontSize + 4}
-                        rx={3}
-                        ry={3}
-                        fill={PAPER_BG}
-                        fillOpacity={isActive ? 0.95 : 0.85}
+                // Heavy graphs: drop per-node animated rings (keep them only on
+                // active node) — they're the single biggest paint cost.
+                const showAnimatedRings = !veryHeavy || isActive;
+                // Heavy graphs: only the active/hovered node gets the SVG drop
+                // shadow filter — flat stroke for everyone else.
+                const nodeFilter = isActive
+                  ? "url(#node-shadow-active)"
+                  : heavy
+                    ? undefined
+                    : "url(#node-shadow)";
+
+                return (
+                  <g
+                    key={n.id}
+                    ref={(el) => {
+                      if (el) nodeRefs.current.set(n.id, el as SVGGElement);
+                      else nodeRefs.current.delete(n.id);
+                    }}
+                    style={{
+                      cursor: "pointer",
+                      opacity: nodeOpacity,
+                      transition: "opacity 150ms",
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelect(n.id === selectedId ? null : n.id);
+                    }}
+                    onMouseEnter={() => setHoveredId(n.id)}
+                    onMouseLeave={() => setHoveredId(null)}
+                    onMouseDown={(e) => {
+                      const sim = simRef.current;
+                      if (!sim || !svgRef.current) return;
+                      const pt = svgRef.current.createSVGPoint();
+                      const ctm = (gRef.current as SVGGElement).getScreenCTM()!;
+                      sim.alphaTarget(0.3).restart();
+                      n.fx = n.x; n.fy = n.y;
+                      const move = (ev: MouseEvent) => {
+                        pt.x = ev.clientX; pt.y = ev.clientY;
+                        const p = pt.matrixTransform(ctm.inverse());
+                        n.fx = p.x; n.fy = p.y;
+                      };
+                      const up = () => {
+                        sim.alphaTarget(0);
+                        n.fx = null; n.fy = null;
+                        window.removeEventListener("mousemove", move);
+                        window.removeEventListener("mouseup", up);
+                      };
+                      window.addEventListener("mousemove", move);
+                      window.addEventListener("mouseup", up);
+                      e.preventDefault();
+                    }}
+                  >
+                    {/* Selection / hover ring */}
+                    {isActive && (
+                      <circle
+                        r={r + 10}
+                        fill="none"
+                        stroke={color}
+                        strokeWidth={1.2}
+                        opacity={0.35}
+                        style={{ animation: isSelected ? "radar-pulse 2.4s ease-out infinite" : undefined }}
                       />
+                    )}
+                    {/* Search match ring */}
+                    {isMatch && !isActive && (
+                      <circle
+                        r={r + 7}
+                        fill="none"
+                        stroke="hsl(32,82%,44%)"
+                        strokeWidth={1.2}
+                        opacity={0.6}
+                        style={{ animation: "radar-pulse 2s ease-out infinite" }}
+                      />
+                    )}
+                    {/* PageRank top-10% outer pulse ring */}
+                    {isTopPR && !isActive && showAnimatedRings && (
+                      <circle
+                        r={r + 14}
+                        fill="none"
+                        stroke="hsl(25,85%,42%)"
+                        strokeWidth={1}
+                        opacity={0.3}
+                        style={{ animation: "radar-pulse 2.8s ease-out infinite" }}
+                      />
+                    )}
+                    {/* Cycle ring — red dashed, always visible */}
+                    {isCyclic && !isActive && showAnimatedRings && (
+                      <circle
+                        r={r + 6}
+                        fill="none"
+                        stroke="hsl(6,72%,50%)"
+                        strokeWidth={1.2}
+                        strokeDasharray="3 2"
+                        opacity={0.65}
+                      />
+                    )}
+                    {/* Orphan ring — grey dotted, always visible */}
+                    {isOrphan && !isCyclic && !isActive && showAnimatedRings && (
+                      <circle
+                        r={r + 4}
+                        fill="none"
+                        stroke="hsl(25,10%,62%)"
+                        strokeWidth={1}
+                        strokeDasharray="2 2"
+                        opacity={0.5}
+                      />
+                    )}
+                    {/* Node */}
+                    <circle
+                      r={r}
+                      fill={color}
+                      stroke={PAPER_BG}
+                      strokeWidth={1.5}
+                      filter={nodeFilter}
+                      opacity={isActive ? 1 : 0.88}
+                    />
+                    {/* Betweenness warning icon */}
+                    {isBtWarn && (
                       <text
-                        x={r + 5}
-                        y={4}
-                        fontSize={fontSize}
-                        fontFamily="var(--font-mono)"
-                        fontWeight={isActive ? 600 : 400}
-                        fill={isActive ? GLASS_TEXT : "hsl(25,12%,28%)"}
-                        opacity={isActive ? 1 : 0.78}
-                        style={{ userSelect: "none" }}
-                      >
-                        {labelText}
-                      </text>
-                    </g>
-                  )}
-                </g>
-              );
-            })}
+                        x={r + 2} y={-r - 2}
+                        fontSize={8} textAnchor="middle"
+                        fill="hsl(6,70%,48%)" opacity={0.85}
+                        style={{ pointerEvents: "none", userSelect: "none" }}
+                      >⚠</text>
+                    )}
+                    {/* Label with background pill */}
+                    {labelVisible && (
+                      <g style={{ pointerEvents: "none", transition: "opacity 200ms" }}>
+                        <rect
+                          x={r + 3}
+                          y={-fontSize / 2 - 2}
+                          width={labelW}
+                          height={fontSize + 4}
+                          rx={3}
+                          ry={3}
+                          fill={PAPER_BG}
+                          fillOpacity={isActive ? 0.95 : 0.85}
+                        />
+                        <text
+                          x={r + 5}
+                          y={4}
+                          fontSize={fontSize}
+                          fontFamily="var(--font-mono)"
+                          fontWeight={isActive ? 600 : 400}
+                          fill={isActive ? GLASS_TEXT : "hsl(25,12%,28%)"}
+                          opacity={isActive ? 1 : 0.78}
+                          style={{ userSelect: "none" }}
+                        >
+                          {labelText}
+                        </text>
+                      </g>
+                    )}
+                  </g>
+                );
+              });
+            })()}
           </g>
         </g>
       </svg>
