@@ -1,1 +1,4 @@
 project_id = "pahubnxeiwqeubafqhuv"
+
+[functions.index-repo]
+verify_jwt = false
