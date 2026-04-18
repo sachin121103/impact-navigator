@@ -1,58 +1,52 @@
 
-The current /code-graph page has three competing zones (toolbar, big canvas, dense sidebar with stats + selection), all framed in cards with similar weight. Visual hierarchy is flat, the canvas is boxed-in, and the sidebar splits attention from the graph itself.
+## Goal
+Make Impact Radar actually work: user types a function name → backend resolves it in an indexed repo → returns ranked downstream callers → radar visualizes them.
 
-## Redesign goals
-1. **One hero**: the graph itself, edge-to-edge, full viewport.
-2. **Chrome dissolves**: toolbar + stats become floating, glassy overlays on top of the canvas — not boxes beside it.
-3. **Detail on demand**: selection panel slides in only when a node is clicked.
-4. **Empty-state breathing room** with a single, calm input at the centre when no repo is loaded.
+## Approach
 
-## Layout
+### 1. New edge function `impact-analyze` (synchronous, fast)
+The earlier plan suggested background jobs, but BFS over the `edges` table is cheap (single SQL per depth, capped). Keep it synchronous for snappy UX.
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│  Compass  Meridian. / code graph              [stats pill]  │  ← thin floating top bar
-│                                                             │
-│                                                             │
-│                  ◯ ── ◯ ─── ◯                              │
-│              ◯       ╲     ╱                                │
-│            ◯ ── ◯ ─── ●                FULL-BLEED CANVAS    │
-│                  ╲   ╱                                      │
-│                   ◯                                         │
-│                                                             │
-│                                                             │
-│  [legend pill]                          [zoom controls]     │  ← bottom-corner floats
-└─────────────────────────────────────────────────────────────┘
-                                          ╲
-                                           └─ slide-in detail
-                                              drawer (right)
-                                              when node selected
-```
+Input: `{ repoUrl?, repoId?, query }`
 
-## Concrete changes
+Steps:
+1. Resolve `repo_id` from `repos` (by `id` or `url`). Require `status='ready'`. 404 otherwise.
+2. Resolve target symbol: exact match on `name` or `qualified_name` within repo → fallback `ilike '%query%'` → pick highest `fan_in`. 404 if none.
+3. **BFS upstream** (callers) up to depth 4, capped at 200 nodes total. Query `edges` where `target_id IN (frontier)` per level, dedupe, track `depth` and `edgeKind`.
+4. Fetch symbol metadata for collected ids.
+5. Score: `risk = 0.5*(1/depth) + 0.3*norm(fan_in) + 0.2*norm(churn)`. Bucket high>0.66 / med>0.33 / low.
+6. Persist row in `impact_runs` (best-effort).
+7. Return `{ target, affected[], summary:{high,med,low,total,depthMax} }`.
 
-**`src/pages/CodeGraph.tsx`** — restructure to a single full-bleed shell:
-- Remove the two-column grid. Canvas becomes `fixed inset-0` with the page as one layer.
-- **Top bar** (floating, translucent): logo + breadcrumb on left; compact repo input (icon-only until focused, expands on click) + "Map repo" on right. Hide "Use sample" inside a small overflow menu.
-- **Stats pill** (top-right, under the bar): one horizontal row — `142 files · 38 classes · 410 fns · 612 edges` in mono micro-type. No card, just a subtle backdrop-blur pill.
-- **Selection drawer** (right side, `w-[360px]`, slides in via `animate-slide-in-right` only when `selected`): contains the existing detail content (type chip, name, file path, LOC/churn meta, connections list). Close button to dismiss.
-- **Empty state** (when `data === SAMPLE_GRAPH` and no repo loaded yet): centred prompt "Map a repository" with the input front-and-centre, behind a faint version of the sample graph at low opacity — invites action without clutter.
-- Remove the heavy stats card and combined sidebar entirely.
+CORS + zod validation + `verify_jwt=false` config block.
 
-**`src/components/CodeGraphCanvas.tsx`** — small polish to support the new layout:
-- Reduce the legend to a single-line pill with smaller dots, positioned with safer offsets so it doesn't overlap the drawer.
-- Move zoom controls to bottom-right (away from top-right where the stats pill now lives).
-- Drop the `cg-glow` background rectangle — let the page's paper texture show through for a calmer feel.
-- Increase node label legibility for selected/file nodes (slight weight bump); dim non-highlighted edges further on selection (0.05) for stronger focus.
+### 2. Frontend wiring
 
-**No changes** to data layer, edge function, or routing.
+**`ImpactInput.tsx`** — make controlled: add `value`, `onChange`, `onSubmit`, `loading` props. Disable + spinner when loading.
 
-## Visual tokens (reuse existing)
-- Floating panels: `bg-card/70 backdrop-blur border border-border/60 shadow-paper rounded-full` (pills) or `rounded-lg` (drawer).
-- Drawer entrance: existing `animate-slide-in-right` from tailwind config.
-- Accent stays deep teal; risk colours unchanged.
+**`ImpactRadar.tsx`** — add state (`repoUrl`, `query`, `result`, `loading`, `error`):
+- Small repo URL field above prompt (persisted to `localStorage`).
+- Submit → `supabase.functions.invoke('impact-analyze', ...)`.
+- Right panel switches between: empty hint → loading → ranked list grouped High/Med/Low (name, file:line, depth chip, mini risk bar) → error message.
+- Legend pill shows real counts when result present.
 
-## Result
-- Graph fills the screen → maximum visual impact.
-- Three small, quiet floats (bar, stats, legend/zoom) instead of four heavy cards.
-- Detail appears contextually, not permanently — clutter drops by ~60%.
+**New `ImpactRadarVisual.tsx`** — replaces decorative `RadarVisual` once a result exists:
+- 4 concentric rings = depth 1..4 (closest = most directly impacted).
+- Each affected symbol = dot at `angle = hash(id) % 360`, radius scales with `risk`, color by bucket (`--risk-high/med/low`).
+- Center node = target function (label below).
+- One-shot sweep animation on new result; pulse on highest-risk dot.
+- Hover dot ↔ highlight row in panel via shared `selectedId`.
+
+### 3. States
+- No repo indexed → inline note "Index this repo on Code Graph first →".
+- No match → "No symbol matching `xxx` found".
+- Loading → dim radar + "Analyzing impact…" pill.
+
+## Files
+- **new** `supabase/functions/impact-analyze/index.ts`
+- **new** `src/components/ImpactRadarVisual.tsx`
+- **edit** `src/components/ImpactInput.tsx`
+- **edit** `src/pages/ImpactRadar.tsx`
+- **edit** `supabase/config.toml` (add `[functions.impact-analyze] verify_jwt = false`)
+
+No DB migrations — all tables/RLS already in place.
