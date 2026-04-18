@@ -48,6 +48,20 @@ const PY_KEYWORDS = new Set([
   "locals", "vars", "dir", "id", "hash", "object", "Exception",
 ]);
 
+const JS_KEYWORDS = new Set([
+  "if", "else", "for", "while", "do", "switch", "case", "default", "break",
+  "continue", "return", "throw", "try", "catch", "finally", "new", "delete",
+  "typeof", "instanceof", "in", "of", "void", "yield", "await", "async",
+  "function", "class", "extends", "super", "this", "var", "let", "const",
+  "import", "export", "from", "as", "true", "false", "null", "undefined",
+  "console", "Math", "JSON", "Object", "Array", "String", "Number", "Boolean",
+  "Promise", "Date", "Error", "Map", "Set", "Symbol", "RegExp",
+  "parseInt", "parseFloat", "isNaN", "isFinite", "setTimeout", "setInterval",
+  "clearTimeout", "clearInterval", "require", "module", "exports",
+  "useState", "useEffect", "useRef", "useMemo", "useCallback", "useContext",
+  "useReducer", "useLayoutEffect",
+]);
+
 const C_KEYWORDS = new Set([
   "if", "else", "for", "while", "do", "switch", "case", "default", "break",
   "continue", "return", "goto", "sizeof", "typedef", "struct", "union", "enum",
