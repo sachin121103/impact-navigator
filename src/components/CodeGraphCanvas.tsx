@@ -45,6 +45,7 @@ const EDGE_STROKE = {
   imports: "hsl(var(--accent) / 0.55)",
   calls: "hsl(var(--foreground) / 0.22)",
   include: "hsl(var(--accent) / 0.4)",
+  contains: "hsl(var(--foreground) / 0.18)",
 } as const;
 
 export const CodeGraphCanvas = ({
