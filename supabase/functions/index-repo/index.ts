@@ -480,9 +480,14 @@ async function* walkSourceFiles(tarBytes: Uint8Array) {
       const path: string = header.name;
       if (
         header.type === "file" &&
-        (isPython(path) || isCFamily(path)) &&
+        (isPython(path) || isCFamily(path) || isJsFamily(path)) &&
         !path.includes("/tests/") &&
         !path.includes("/test_") &&
+        !path.includes("/__tests__/") &&
+        !path.includes("/node_modules/") &&
+        !path.includes("/dist/") &&
+        !path.includes("/build/") &&
+        !/\.(test|spec)\.(ts|tsx|js|jsx)$/i.test(path) &&
         !path.includes("/.")
       ) {
         queue.push({ path, content: Buffer.concat(chunks).toString("utf-8") });
