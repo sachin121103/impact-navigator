@@ -143,6 +143,26 @@ export const CodeGraphCanvas = ({
     return () => ro.disconnect();
   }, []);
 
+  // Compute zone centroid anchors (grid layout) based on size + zone count
+  const zoneAnchors = useMemo(() => {
+    const anchors = new Map<string, { cx: number; cy: number }>();
+    const n = zoneList.length;
+    if (n === 0) return anchors;
+    const cols = Math.ceil(Math.sqrt(n * (size.w / size.h)));
+    const rows = Math.ceil(n / cols);
+    const cellW = size.w / cols;
+    const cellH = size.h / rows;
+    zoneList.forEach((z, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      anchors.set(z.key, {
+        cx: cellW * (col + 0.5),
+        cy: cellH * (row + 0.5),
+      });
+    });
+    return anchors;
+  }, [zoneList, size.w, size.h]);
+
   // Build & run simulation
   useEffect(() => {
     const sim = forceSimulation<SimNode, SimLink>(nodes)
@@ -168,9 +188,20 @@ export const CodeGraphCanvas = ({
           (d) => (NODE_RADIUS[d.type] ?? 4) + 4,
         ),
       )
-      .force("x", forceX(size.w / 2).strength(0.04))
-      .force("y", forceY(size.h / 2).strength(0.04))
-      .force("center", forceCenter(size.w / 2, size.h / 2))
+      .force(
+        "x",
+        forceX<SimNode>((d) => {
+          const k = zoneByNodeId.get(d.id);
+          return (k && zoneAnchors.get(k)?.cx) ?? size.w / 2;
+        }).strength(0.18),
+      )
+      .force(
+        "y",
+        forceY<SimNode>((d) => {
+          const k = zoneByNodeId.get(d.id);
+          return (k && zoneAnchors.get(k)?.cy) ?? size.h / 2;
+        }).strength(0.18),
+      )
       .alpha(1)
       .alphaDecay(0.035);
 
@@ -180,7 +211,7 @@ export const CodeGraphCanvas = ({
       sim.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, links, size.w, size.h]);
+  }, [nodes, links, size.w, size.h, zoneAnchors, zoneByNodeId]);
 
   // Zoom & pan
   useEffect(() => {
