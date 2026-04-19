@@ -174,6 +174,8 @@ const ImpactRadar = () => {
       return;
     }
     setRadarState({ status: "loading" });
+    setSuggestState({ status: "idle" });
+    setLastPrompt(prompt);
     try {
       const { data, error } = await supabase.functions.invoke("run-radar", {
         body: { prompt, repoUrl: repoUrl.trim() },
@@ -183,6 +185,38 @@ const ImpactRadar = () => {
       setRadarState({ status: "result", data: data as RunResult });
     } catch (err) {
       setRadarState({ status: "error", message: (err as Error).message });
+    }
+  };
+
+  const handleExplain = async () => {
+    if (radarState.status !== "result") return;
+    const { resolvedSymbol, affected } = radarState.data;
+    if (affected.length === 0) return;
+    setSuggestState({ status: "loading" });
+    try {
+      const { data, error } = await supabase.functions.invoke("impact-suggest", {
+        body: {
+          prompt: lastPrompt,
+          target: resolvedSymbol,
+          affected: affected.slice(0, 8).map((a) => ({
+            id: a.id,
+            name: a.name,
+            qualified_name: a.qualified_name,
+            kind: a.kind,
+            file_path: a.file_path,
+            risk: a.risk,
+            depth: a.depth,
+          })),
+        },
+      });
+      if (error) throw new Error(error.message);
+      if (!(data as any)?.ok) throw new Error((data as any)?.error ?? "Failed to get suggestions");
+      const suggestions: Suggestion[] = (data as any).suggestions ?? [];
+      const map: Record<string, Suggestion> = {};
+      for (const s of suggestions) map[s.id] = s;
+      setSuggestState({ status: "ready", map });
+    } catch (err) {
+      setSuggestState({ status: "error", message: (err as Error).message });
     }
   };
 
