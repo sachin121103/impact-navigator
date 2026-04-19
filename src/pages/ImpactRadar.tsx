@@ -96,11 +96,12 @@ const ImpactRadar = () => {
     setRepoStatus({ state: "checking" });
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
-      const { data } = await supabase
+      const { data: { user } } = await supabase.auth.getUser();
+      const q = supabase
         .from("repos")
         .select("status, status_message, symbol_count, edge_count")
-        .eq("url", repoUrl.trim())
-        .maybeSingle();
+        .eq("url", repoUrl.trim());
+      const { data } = user ? await q.eq("owner_id", user.id).maybeSingle() : await q.maybeSingle();
 
       if (!data) {
         setRepoStatus({ state: "not-found" });
