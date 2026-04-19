@@ -1244,21 +1244,11 @@ export const CodeGraphCanvas = ({
         </g>
       </svg>
 
-      {/* Loading scrim during pre-warm */}
-      <div
-        className="pointer-events-none absolute inset-0 flex items-center justify-center"
-        style={{
-          opacity: composing ? 1 : 0,
-          transition: "opacity 500ms ease-out",
-        }}
-      >
-        <div
-          className="rounded-full border px-4 py-2 font-mono text-[11px] shadow-paper"
-          style={{ ...GLASS, color: GLASS_MUTED, letterSpacing: "0.08em" }}
-        >
-          <span className="inline-block animate-pulse">Composing graph…</span>
-        </div>
-      </div>
+      {/* Loading scrim during pre-warm — animated skeleton orbs + cycling
+          status messages give a sense of forward motion even though the
+          actual layout finishes in well under a second. */}
+      <ComposingScrim visible={composing} width={size.w} height={size.h} />
+
 
       {/* Zoom + view controls */}
       <div
