@@ -981,8 +981,11 @@ function buildGraph(files: { path: string; content: string }[]): {
 
   const fnIndex: Record<string, string> = {};
   const pendingCalls: [string, string][] = [];
-  // Java import resolution needs a class-name → file index built up front.
+  // Class/module → file indexes for cross-file import resolution.
   const javaClassIdx = buildJavaClassIndex(files);
+  const goPkgIdx = buildGoPackageIndex(files);
+  const rustModIdx = buildRustModuleIndex(files);
+  const csharpClassIdx = buildCSharpClassIndex(files);
 
   for (const f of files) {
     const ext = f.path.slice(f.path.lastIndexOf(".")).toLowerCase();
