@@ -307,31 +307,38 @@ const TestPath = () => {
               </div>
             </TabsContent>
 
-            {/* ── DEAD CODE ── Symbols nothing else uses. */}
+            {/* ── DEAD CODE ── Functions nothing else calls. */}
             <TabsContent value="dead" className="mt-4 space-y-3">
               <p className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">Dead code.</span> Symbols nothing else points to: functions or classes with no callers outside their file, files that nobody imports, and tests that don't exercise anything.
+                <span className="font-medium text-foreground">Dead functions.</span> Functions or classes that nothing else calls from outside their own file. Click one to highlight it on the graph and see exactly where it lives.
               </p>
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <Stat label="dead" value={dead.length} tone={dead.length ? "destructive" : undefined} />
-                <Stat label="files" value={dead.filter((d) => d.reason === "no importers").length} />
-                <Stat label="symbols" value={dead.filter((d) => d.reason === "no callers").length} />
+              <div className="grid grid-cols-2 gap-2 text-center">
+                <Stat label="dead fns" value={deadFunctions.length} tone={deadFunctions.length ? "destructive" : undefined} />
+                <Stat label="of total" value={data.nodes.filter((n) => n.type === "function" || n.type === "class").length} />
               </div>
-              <ul className="max-h-[260px] space-y-1 overflow-auto rounded-md border border-border/60 p-1.5">
-                {dead.map((d) => (
-                  <li key={d.node.id} className="grid grid-cols-[1fr_auto] items-center gap-2 rounded px-2 py-1.5 text-xs">
-                    <div className="min-w-0">
-                      <p className="truncate">{d.node.name}</p>
-                      <p className="truncate font-mono text-[10px] text-muted-foreground">{d.node.file}</p>
-                    </div>
-                    <Badge variant="secondary" className="shrink-0 font-mono text-[9px]">
-                      {d.reason}
-                    </Badge>
-                  </li>
-                ))}
-                {dead.length === 0 && (
+              <ul className="max-h-[320px] space-y-1 overflow-auto rounded-md border border-border/60 p-1.5">
+                {deadFunctions.map((d) => {
+                  const active = modifiedId === d.node.id;
+                  return (
+                    <li key={d.node.id}>
+                      <button
+                        onClick={() => setModifiedId(d.node.id)}
+                        className={`grid w-full grid-cols-[1fr_auto] items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${active ? "bg-accent/15 ring-1 ring-accent/40" : "hover:bg-secondary"}`}
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate">{d.node.name}</p>
+                          <p className="truncate font-mono text-[10px] text-muted-foreground">{d.node.file}</p>
+                        </div>
+                        <Badge variant="secondary" className="shrink-0 font-mono text-[9px]">
+                          {d.node.type}
+                        </Badge>
+                      </button>
+                    </li>
+                  );
+                })}
+                {deadFunctions.length === 0 && (
                   <li className="px-2 py-3 text-center text-xs text-muted-foreground">
-                    nothing dead — clean graph ✨
+                    no dead functions — clean graph ✨
                   </li>
                 )}
               </ul>
