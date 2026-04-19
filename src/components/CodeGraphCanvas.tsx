@@ -449,12 +449,16 @@ export const CodeGraphCanvas = ({
 
     const buildEdgePath = (arr: SimLink[]) => {
       // Simple line segments concatenated into one path.
+      // Skip edges where either endpoint is currently culled (off-screen) — otherwise
+      // we draw lines pointing into empty space because the node circle is display:none.
+      const culled = culledRef.current;
       let d = "";
       for (let i = 0; i < arr.length; i++) {
         const l = arr[i];
         const s = l.source as SimNode;
         const t = l.target as SimNode;
         if (s.x == null || t.x == null) continue;
+        if (culled.has(s.id) || culled.has(t.id)) continue;
         const dx = t.x - s.x;
         const dy = t.y - s.y;
         const dist = Math.sqrt(dx * dx + dy * dy) || 1;
