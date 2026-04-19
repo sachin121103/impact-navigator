@@ -629,10 +629,11 @@ export const CodeGraphCanvas = ({
 
   // Stable zone descriptor list. Positions/sizes are mutated via refs in the
   // sim tick loop — never recomputed on every React render.
+  // Suppressed during initial compose so morphing rects don't flash.
   const zoneDescriptors = useMemo(() => {
-    if (!showZones) return [];
+    if (!showZones || !settled) return [];
     return zoneList.map((z) => ({ key: z.key, hue: z.hue, members: z.members }));
-  }, [zoneList, showZones]);
+  }, [zoneList, showZones, settled]);
 
   const showFileLabels = zoomLevel > 0.7;
   const showClassLabels = zoomLevel > 1.2;
