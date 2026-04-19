@@ -587,11 +587,14 @@ export const CodeGraphCanvas = ({
     simRef.current = sim;
 
     // ----- Pre-warm: silently advance the simulation before the first paint -----
+    // Aggressively reduced tick counts — the layout converges quickly given
+    // our seeded radial init, and any residual drift is masked by the gentle
+    // post-reveal "breathe" pass.
     setComposing(true);
     setSettled(false);
     let prewarmCancelled = false;
     const prewarmTicks =
-      nodes.length <= 500 ? 120 : nodes.length <= 2000 ? 80 : 50;
+      nodes.length <= 500 ? 50 : nodes.length <= 2000 ? 35 : 22;
     const startSim = () => {
       if (prewarmCancelled) return;
       // Run silent ticks (no DOM writes — `sim.tick(n)` doesn't fire "tick").
@@ -601,15 +604,15 @@ export const CodeGraphCanvas = ({
       updateZoneRects();
       updateCulling();
       // Resume a gentle "breathe into place" — low alpha, fast clean stop.
-      sim.alpha(0.2).alphaDecay(0.08).alphaMin(0.05).restart();
-      // Reveal.
+      sim.alpha(0.18).alphaDecay(0.1).alphaMin(0.05).restart();
+      // Reveal immediately on the next frame.
       requestAnimationFrame(() => {
         if (!prewarmCancelled) setComposing(false);
       });
-      // Mark settled after the breathe completes so zone rects can appear.
+      // Mark settled quickly so zone rects appear without a long wait.
       window.setTimeout(() => {
         if (!prewarmCancelled) setSettled(true);
-      }, 700);
+      }, 250);
     };
     // Defer one frame so the loading scrim paints first.
     const handle = window.setTimeout(startSim, 0);
@@ -896,7 +899,7 @@ export const CodeGraphCanvas = ({
           style={{
             willChange: "transform",
             opacity: composing ? 0 : 1,
-            transition: "opacity 600ms ease-out",
+            transition: "opacity 280ms ease-out",
           }}
         >
           {/* Zone backgrounds */}
@@ -1241,21 +1244,11 @@ export const CodeGraphCanvas = ({
         </g>
       </svg>
 
-      {/* Loading scrim during pre-warm */}
-      <div
-        className="pointer-events-none absolute inset-0 flex items-center justify-center"
-        style={{
-          opacity: composing ? 1 : 0,
-          transition: "opacity 500ms ease-out",
-        }}
-      >
-        <div
-          className="rounded-full border px-4 py-2 font-mono text-[11px] shadow-paper"
-          style={{ ...GLASS, color: GLASS_MUTED, letterSpacing: "0.08em" }}
-        >
-          <span className="inline-block animate-pulse">Composing graph…</span>
-        </div>
-      </div>
+      {/* Loading scrim during pre-warm — animated skeleton orbs + cycling
+          status messages give a sense of forward motion even though the
+          actual layout finishes in well under a second. */}
+      <ComposingScrim visible={composing} width={size.w} height={size.h} />
+
 
       {/* Zoom + view controls */}
       <div
@@ -1337,6 +1330,138 @@ export const CodeGraphCanvas = ({
         ) : (
           <MetricLegend mode={analysisMode} />
         )}
+      </div>
+    </div>
+  );
+};
+
+// Animated loading skeleton: faint orbs pulse across the canvas while a
+// status line cycles through plausible work descriptions. Pure visual —
+// purely for perceived performance.
+const ComposingScrim = ({
+  visible,
+  width,
+  height,
+}: {
+  visible: boolean;
+  width: number;
+  height: number;
+}) => {
+  const STAGES = [
+    "Reading structure…",
+    "Placing nodes…",
+    "Drawing connections…",
+    "Settling layout…",
+  ];
+  const [stage, setStage] = useState(0);
+  const [mounted, setMounted] = useState(visible);
+
+  useEffect(() => {
+    if (visible) setMounted(true);
+    else {
+      const t = window.setTimeout(() => setMounted(false), 320);
+      return () => window.clearTimeout(t);
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    setStage(0);
+    const id = window.setInterval(() => {
+      setStage((s) => Math.min(s + 1, STAGES.length - 1));
+    }, 240);
+    return () => window.clearInterval(id);
+  }, [visible]);
+
+  // Deterministic orb positions hint at the upcoming graph clusters.
+  const orbs = useMemo(() => {
+    const out: { x: number; y: number; r: number; delay: number; hue: number }[] = [];
+    const cols = 5;
+    const rows = 4;
+    let i = 0;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const jitterX = ((i * 53) % 17) - 8;
+        const jitterY = ((i * 37) % 13) - 6;
+        out.push({
+          x: ((c + 0.5) / cols) * width + jitterX,
+          y: ((r + 0.5) / rows) * height + jitterY,
+          r: 6 + ((i * 7) % 9),
+          delay: (i % 8) * 90,
+          hue: 30 + ((i * 47) % 180),
+        });
+        i++;
+      }
+    }
+    return out;
+  }, [width, height]);
+
+  if (!mounted) return null;
+
+  return (
+    <div
+      className="pointer-events-none absolute inset-0"
+      style={{
+        opacity: visible ? 1 : 0,
+        transition: "opacity 280ms ease-out",
+      }}
+    >
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="absolute inset-0 h-full w-full"
+        preserveAspectRatio="none"
+      >
+        {orbs.map((o, i) => (
+          <circle
+            key={i}
+            cx={o.x}
+            cy={o.y}
+            r={o.r}
+            fill={`hsl(${o.hue},38%,72%)`}
+            opacity={0.18}
+            style={{
+              animation: `radar-pulse 1.4s ease-in-out ${o.delay}ms infinite`,
+              transformOrigin: `${o.x}px ${o.y}px`,
+            }}
+          />
+        ))}
+      </svg>
+
+      <div className="absolute inset-0 flex items-center justify-center">
+        <div
+          className="flex flex-col items-center gap-2.5 rounded-2xl border px-5 py-3 shadow-paper"
+          style={{ ...GLASS, minWidth: 220 }}
+        >
+          <div
+            className="flex items-center gap-2 font-mono text-[11px]"
+            style={{ color: GLASS_TEXT, letterSpacing: "0.05em" }}
+          >
+            <span
+              className="inline-block h-1.5 w-1.5 rounded-full"
+              style={{
+                background: "hsl(184,68%,34%)",
+                animation: "radar-pulse 1.1s ease-in-out infinite",
+              }}
+            />
+            <span key={stage} className="animate-fade-in">
+              {STAGES[stage]}
+            </span>
+          </div>
+          <div
+            className="h-0.5 w-full overflow-hidden rounded-full"
+            style={{ background: "hsl(25,10%,88%)" }}
+          >
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: "40%",
+                background:
+                  "linear-gradient(90deg, transparent, hsl(184,68%,34%), transparent)",
+                animation: "shimmer-slide 1.2s linear infinite",
+              }}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );
