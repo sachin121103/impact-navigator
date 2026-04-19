@@ -122,12 +122,18 @@ function analysisColor(
   return NODE_COLOR[n.type];
 }
 
-// PageRank radius boost on top of degree-based radius
+// PageRank radius boost on top of degree-based radius — amplified so the
+// top-influencers actually pop visually instead of looking near-identical.
 function analysisRadius(n: SimNode, mode: AnalysisMode, metrics: GraphMetrics | undefined): number {
   const base = nodeR(n);
   if (mode === "pagerank" && metrics) {
-    const score = metrics.pagerank.get(n.id) ?? 0;
-    return base + score * 28;
+    const pct = metrics.pagerankPercentile.get(n.id) ?? 0;
+    // 0..1 percentile → up to +10px (smooth curve so top 20% balloons)
+    return base + Math.pow(pct, 1.6) * 10;
+  }
+  if (mode === "betweenness" && metrics) {
+    const score = metrics.betweenness.get(n.id) ?? 0;
+    return base + Math.min(score * 18, 8);
   }
   return base;
 }
@@ -972,7 +978,8 @@ export const CodeGraphCanvas = ({
                 // PageRank top-10%: outer glow ring
                 const prPct = analysisMode === "pagerank" && metrics
                   ? (metrics.pagerankPercentile.get(n.id) ?? 0) : 0;
-                const isTopPR = prPct >= 0.9;
+                const isTopPR = prPct >= 0.75;
+                const isVeryTopPR = prPct >= 0.9;
                 // Betweenness warning threshold
                 const btScore = analysisMode === "betweenness" && metrics
                   ? (metrics.betweenness.get(n.id) ?? 0) : 0;
@@ -1053,16 +1060,23 @@ export const CodeGraphCanvas = ({
                         style={{ animation: "radar-pulse 2s ease-out infinite" }}
                       />
                     )}
-                    {/* PageRank top-10% outer pulse ring */}
+                    {/* PageRank top influencers — soft glow + pulse for the very top decile */}
                     {isTopPR && !isActive && showAnimatedRings && (
-                      <circle
-                        r={r + 14}
-                        fill="none"
-                        stroke="hsl(25,85%,42%)"
-                        strokeWidth={1}
-                        opacity={0.3}
-                        style={{ animation: "radar-pulse 2.8s ease-out infinite" }}
-                      />
+                      <>
+                        <circle
+                          r={r + 8}
+                          fill="hsl(25,85%,42%)"
+                          opacity={isVeryTopPR ? 0.18 : 0.1}
+                        />
+                        <circle
+                          r={r + 14}
+                          fill="none"
+                          stroke="hsl(25,85%,42%)"
+                          strokeWidth={isVeryTopPR ? 1.4 : 1}
+                          opacity={isVeryTopPR ? 0.5 : 0.3}
+                          style={{ animation: "radar-pulse 2.8s ease-out infinite" }}
+                        />
+                      </>
                     )}
                     {/* Cycle ring — red dashed, always visible */}
                     {isCyclic && !isActive && showAnimatedRings && (

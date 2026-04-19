@@ -43,7 +43,6 @@ const MODES: { id: AnalysisMode; label: string }[] = [
   { id: "none",        label: "Structure" },
   { id: "pagerank",    label: "Influence" },
   { id: "betweenness", label: "Bottleneck Risk" },
-  { id: "clustering",  label: "Coupling" },
 ];
 
 // ─── Health stat thresholds ───────────────────────────────────────────────────
