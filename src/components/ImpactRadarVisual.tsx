@@ -85,12 +85,11 @@ export const ImpactRadarVisual = ({
         <line x1={cx} y1={20} x2={cx} y2={300} stroke="hsl(var(--foreground))" strokeOpacity="0.05" />
         <line x1={20} y1={cy} x2={300} y2={cy} stroke="hsl(var(--foreground))" strokeOpacity="0.05" />
 
-        {/* one-shot sweep */}
+        {/* continuous sweep */}
         <g
-          key={targetName}
           style={{
             transformOrigin: `${cx}px ${cy}px`,
-            animation: "radar-sweep 2.4s var(--ease-out-expo) 1",
+            animation: "radar-sweep 4s linear infinite",
           }}
         >
           <defs>
