@@ -535,8 +535,8 @@ export const CodeGraphCanvas = ({
       onTick();
       updateZoneRects();
       updateCulling();
-      // Resume a gentle "breathe into place" — low alpha, slow decay.
-      sim.alpha(0.3).alphaDecay(0.05).restart();
+      // Resume a gentle "breathe into place" — low alpha, fast clean stop.
+      sim.alpha(0.2).alphaDecay(0.08).alphaMin(0.05).restart();
       // Reveal.
       requestAnimationFrame(() => {
         if (!prewarmCancelled) setComposing(false);
