@@ -310,16 +310,14 @@ const ImpactRadar = () => {
         <RadarVisual results={affected.length > 0 ? affected : undefined} />
         <div className="pointer-events-none absolute -bottom-4 left-1/2 -translate-x-1/2 rounded-md border border-border bg-card px-4 py-2.5 font-mono text-xs shadow-paper whitespace-nowrap">
           {radarState.status === "result" ? (() => {
-            const aff = radarState.data.affected;
-            const immediate = aff.filter((a) => a.depth <= 2).length;
-            const transitive = aff.length - immediate;
-            const deepest = aff.reduce((m, a) => Math.max(m, a.depth), 0);
+            const { level } = computeCriticality(
+              radarState.data.affected,
+              (radarState.data as any).resolvedSymbol?.fan_in ?? 0,
+              (radarState.data as any).changeKind ?? "behavior",
+            );
+            const meta = CRIT_META[level];
             return (
-              <span className="text-muted-foreground">
-                <span className="text-foreground font-semibold">{immediate}</span> immediate ·{" "}
-                <span className="text-foreground font-semibold">{transitive}</span> transitive
-                {deepest > 0 && <> · deepest <span className="text-foreground font-semibold">d{deepest}</span></>}
-              </span>
+              <span className={`font-semibold tracking-wide ${meta.color}`}>{meta.label}</span>
             );
           })() : radarState.status === "loading" ? (
             <span className="text-muted-foreground animate-pulse">scanning…</span>
