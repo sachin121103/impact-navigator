@@ -442,19 +442,46 @@ const isPython = (p: string) => p.endsWith(".py");
 const isCFamily = (p: string) => /\.(c|h|cpp|cc|cxx|hpp|hh|hxx)$/i.test(p);
 const isJsFamily = (p: string) => /\.(ts|tsx|js|jsx|mjs|cjs)$/i.test(p) && !p.endsWith(".d.ts");
 
-async function fetchTarball(owner: string, repo: string, branch: string): Promise<Uint8Array> {
+// Files we must never index — credentials, keys, lock noise that could
+// leak proprietary info as symbol nodes.
+const SECRET_FILE_RE = /(?:^|\/)(\.env(\..*)?|.*\.pem|.*\.key|id_rsa.*|.*\.p12|.*\.pfx|secrets?(\..*)?|credentials?(\..*)?|.*\.crt|.*\.cer)$/i;
+const SECRET_DIR_RE = /(?:^|\/)(node_modules|vendor|\.git|dist|build|\.next|\.cache|coverage|__pycache__)\//i;
+const MAX_FILE_BYTES = 1_000_000;
+
+function isSecretOrIgnored(path: string): boolean {
+  if (SECRET_DIR_RE.test(path)) return true;
+  if (SECRET_FILE_RE.test(path)) return true;
+  return false;
+}
+
+async function fetchTarball(
+  owner: string,
+  repo: string,
+  branch: string,
+  githubToken?: string,
+): Promise<Uint8Array> {
   const url = `https://codeload.github.com/${owner}/${repo}/tar.gz/refs/heads/${branch}`;
-  const res = await fetch(url, { headers: { "User-Agent": "impact-radar-indexer" } });
+  const headers: Record<string, string> = { "User-Agent": "impact-radar-indexer" };
+  if (githubToken) headers["Authorization"] = `token ${githubToken}`;
+  const res = await fetch(url, { headers });
   if (!res.ok) throw new Error(`Failed to download tarball (${branch}): ${res.status}`);
   const buf = new Uint8Array(await res.arrayBuffer());
   return new Uint8Array(gunzipSync(Buffer.from(buf)));
 }
 
-async function resolveDefaultBranch(owner: string, repo: string, fallback: string): Promise<string> {
+async function resolveDefaultBranch(
+  owner: string,
+  repo: string,
+  fallback: string,
+  githubToken?: string,
+): Promise<string> {
   try {
-    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
-      headers: { "User-Agent": "impact-radar-indexer", Accept: "application/vnd.github+json" },
-    });
+    const headers: Record<string, string> = {
+      "User-Agent": "impact-radar-indexer",
+      Accept: "application/vnd.github+json",
+    };
+    if (githubToken) headers["Authorization"] = `token ${githubToken}`;
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers });
     if (!res.ok) return fallback;
     const j = await res.json();
     return j.default_branch || fallback;
@@ -475,18 +502,18 @@ async function* walkSourceFiles(tarBytes: Uint8Array) {
 
   extract.on("entry", (header: any, stream: any, next: any) => {
     const chunks: Buffer[] = [];
-    stream.on("data", (c: Buffer) => chunks.push(c));
+    let size = 0;
+    stream.on("data", (c: Buffer) => { chunks.push(c); size += c.length; });
     stream.on("end", () => {
       const path: string = header.name;
       if (
         header.type === "file" &&
+        size <= MAX_FILE_BYTES &&
+        !isSecretOrIgnored(path) &&
         (isPython(path) || isCFamily(path) || isJsFamily(path)) &&
         !path.includes("/tests/") &&
         !path.includes("/test_") &&
         !path.includes("/__tests__/") &&
-        !path.includes("/node_modules/") &&
-        !path.includes("/dist/") &&
-        !path.includes("/build/") &&
         !/\.(test|spec)\.(ts|tsx|js|jsx)$/i.test(path) &&
         !path.includes("/.")
       ) {
@@ -532,79 +559,133 @@ Deno.serve(async (req) => {
   );
 
   try {
-    // Support both GitHub push webhook payloads and plain JSON API calls
     let repoUrl: string;
     let branchHint: string | undefined;
+    let ownerId: string | null = null;
+    let githubToken: string | undefined;
     const githubEvent = req.headers.get("X-GitHub-Event");
 
     if (githubEvent === "push") {
+      // Machine-to-machine: HMAC-signed GitHub push webhook.
       const rawBody = await req.text();
-
-      // Verify HMAC-SHA256 signature when WEBHOOK_SECRET is configured
       const webhookSecret = Deno.env.get("WEBHOOK_SECRET");
-      if (webhookSecret) {
-        const sig = req.headers.get("X-Hub-Signature-256") ?? "";
-        const encoder = new TextEncoder();
-        const key = await crypto.subtle.importKey(
-          "raw", encoder.encode(webhookSecret),
-          { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+      if (!webhookSecret) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "WEBHOOK_SECRET not configured" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
-        const mac = await crypto.subtle.sign("HMAC", key, encoder.encode(rawBody));
-        const expected = "sha256=" + Array.from(new Uint8Array(mac))
-          .map((b) => b.toString(16).padStart(2, "0")).join("");
-        if (sig !== expected) {
-          return new Response(
-            JSON.stringify({ ok: false, error: "Invalid webhook signature" }),
-            { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-          );
-        }
+      }
+      const sig = req.headers.get("X-Hub-Signature-256") ?? "";
+      const encoder = new TextEncoder();
+      const key = await crypto.subtle.importKey(
+        "raw", encoder.encode(webhookSecret),
+        { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+      );
+      const mac = await crypto.subtle.sign("HMAC", key, encoder.encode(rawBody));
+      const expected = "sha256=" + Array.from(new Uint8Array(mac))
+        .map((b) => b.toString(16).padStart(2, "0")).join("");
+      if (sig !== expected) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "Invalid webhook signature" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
       }
       const payload = JSON.parse(rawBody);
       repoUrl = payload.repository?.html_url;
       branchHint = (payload.ref ?? "refs/heads/main").replace("refs/heads/", "");
+      ownerId = payload.meridian_user_id ?? null;
       if (!repoUrl) throw new Error("Missing repository.html_url in push payload");
+      if (!ownerId) throw new Error("Webhook payload missing meridian_user_id");
     } else {
+      // Authenticated user path: require valid JWT.
+      const authHeader = req.headers.get("Authorization");
+      if (!authHeader?.startsWith("Bearer ")) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "Unauthorized" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const userClient = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_ANON_KEY")!,
+        { global: { headers: { Authorization: authHeader } } },
+      );
+      const token = authHeader.replace("Bearer ", "");
+      const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
+      if (claimsErr || !claimsData?.claims?.sub) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "Invalid session" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      ownerId = claimsData.claims.sub as string;
+
       const body = await req.json().catch(() => ({}));
-      repoUrl = body.repoUrl ?? "https://github.com/psf/requests";
-      branchHint = body.branch; // undefined → resolved below via GitHub API
+      if (!body.repoUrl) throw new Error("repoUrl is required");
+      repoUrl = body.repoUrl;
+      branchHint = body.branch;
+      githubToken = typeof body.githubToken === "string" && body.githubToken.length > 0
+        ? body.githubToken
+        : undefined;
     }
 
     const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+?)(?:\.git)?(?:\/)?$/);
     if (!match) throw new Error("Invalid GitHub URL");
     const [, owner, name] = match;
 
-    // Resolve default branch from GitHub API when not explicitly provided
-    const branch = branchHint ?? (await resolveDefaultBranch(owner, name, "main"));
+    const branch = branchHint ?? (await resolveDefaultBranch(owner, name, "main", githubToken));
 
-    // Upsert repo row → indexing
-    const { data: repoRow, error: repoErr } = await supabase
+    // Per-owner repo row. Different users each get their own row for the same URL.
+    const { data: existing } = await supabase
       .from("repos")
-      .upsert(
-        { url: repoUrl, owner, name, default_branch: branch, status: "indexing", status_message: "Downloading…" },
-        { onConflict: "url" },
-      )
-      .select()
-      .single();
-    if (repoErr || !repoRow) throw new Error(repoErr?.message || "Failed to create repo row");
-    const repoId = (repoRow as any).id as string;
+      .select("id")
+      .eq("url", repoUrl)
+      .eq("owner_id", ownerId)
+      .maybeSingle();
+
+    let repoId: string;
+    if (existing) {
+      repoId = (existing as any).id;
+      await supabase.from("repos").update({
+        owner, name, default_branch: branch,
+        status: "indexing", status_message: "Downloading…",
+      }).eq("id", repoId);
+    } else {
+      const { data: created, error: createErr } = await supabase
+        .from("repos")
+        .insert({
+          url: repoUrl, owner, name, default_branch: branch,
+          status: "indexing", status_message: "Downloading…",
+          owner_id: ownerId,
+        })
+        .select("id")
+        .single();
+      if (createErr || !created) throw new Error(createErr?.message || "Failed to create repo row");
+      repoId = (created as any).id;
+    }
 
     try {
       // Wipe previous data for this repo
       await supabase.from("symbols").delete().eq("repo_id", repoId);
 
-      // Fetch HEAD commit SHA (best-effort; used for incremental re-index detection)
+      // Fetch HEAD commit SHA (best-effort)
+      const commitHeaders: Record<string, string> = {
+        "User-Agent": "impact-radar-indexer",
+        Accept: "application/vnd.github+json",
+      };
+      if (githubToken) commitHeaders["Authorization"] = `token ${githubToken}`;
       const shaRes = await fetch(
         `https://api.github.com/repos/${owner}/${name}/commits/${branch}`,
-        { headers: { "User-Agent": "impact-radar-indexer", Accept: "application/vnd.github+json" } },
+        { headers: commitHeaders },
       );
       const commitSha: string | null = shaRes.ok ? ((await shaRes.json()) as any).sha ?? null : null;
 
       // Download tarball with master fallback
       let tarball: Uint8Array;
       try {
-        tarball = await fetchTarball(owner, name, branch);
+        tarball = await fetchTarball(owner, name, branch, githubToken);
       } catch {
-        tarball = await fetchTarball(owner, name, "master");
+        tarball = await fetchTarball(owner, name, "master", githubToken);
       }
       await supabase.from("repos").update({ status_message: "Parsing source files…" }).eq("id", repoId);
 

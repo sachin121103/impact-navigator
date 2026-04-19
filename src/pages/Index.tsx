@@ -1,8 +1,10 @@
 import { Link } from "react-router-dom";
-import { Compass, GitBranch, Sparkles, Radar, ArrowUpRight } from "lucide-react";
+import { Compass, GitBranch, Sparkles, Radar, ArrowUpRight, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/hooks/useAuth";
 
 const Index = () => {
+  const { user, signOut } = useAuth();
   return (
     <div className="min-h-screen texture-paper">
       {/* Nav */}
@@ -20,7 +22,20 @@ const Index = () => {
           <Link to="/sentinel-graph" className="hover:text-foreground transition-colors">Sentinel Graph</Link>
           <Link to="/impact-radar" className="hover:text-foreground transition-colors">Impact Radar</Link>
         </nav>
-        <Button variant="outline" size="sm">Sign in</Button>
+        {user ? (
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/repos">My repos</Link>
+            </Button>
+            <Button variant="ghost" size="sm" onClick={signOut} className="gap-1.5">
+              <LogOut className="h-3.5 w-3.5" /> Sign out
+            </Button>
+          </div>
+        ) : (
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/auth">Sign in</Link>
+          </Button>
+        )}
       </header>
 
       {/* Hero */}
