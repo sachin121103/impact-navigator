@@ -287,13 +287,20 @@ const ImpactRadar = () => {
       <div className="relative mx-auto w-full max-w-[620px]">
         <RadarVisual results={affected.length > 0 ? affected : undefined} />
         <div className="pointer-events-none absolute -bottom-4 left-1/2 -translate-x-1/2 rounded-md border border-border bg-card px-4 py-2.5 font-mono text-xs shadow-paper whitespace-nowrap">
-          {summary ? (
-            <>
-              <span className="text-risk-high">●</span> {summary.high} will break ·{" "}
-              <span className="text-risk-med">●</span> {summary.medium} review ·{" "}
-              <span className="text-risk-low">●</span> {summary.low} safe
-            </>
-          ) : radarState.status === "loading" ? (
+          {radarState.status === "result" ? (() => {
+            const { level } = computeCriticality(
+              radarState.data.affected,
+              (radarState.data as any).resolvedSymbol?.fan_in ?? 0,
+            );
+            const meta = CRIT_META[level];
+            return (
+              <>
+                <span className={meta.color}>●</span>{" "}
+                <span className={`${meta.color} font-semibold`}>{meta.label}</span>{" "}
+                <span className="text-muted-foreground">change · {radarState.data.summary.total} symbols affected</span>
+              </>
+            );
+          })() : radarState.status === "loading" ? (
             <span className="text-muted-foreground animate-pulse">scanning…</span>
           ) : (
             <span className="text-muted-foreground">enter a repo to begin</span>
