@@ -122,12 +122,18 @@ function analysisColor(
   return NODE_COLOR[n.type];
 }
 
-// PageRank radius boost on top of degree-based radius
+// PageRank radius boost on top of degree-based radius — amplified so the
+// top-influencers actually pop visually instead of looking near-identical.
 function analysisRadius(n: SimNode, mode: AnalysisMode, metrics: GraphMetrics | undefined): number {
   const base = nodeR(n);
   if (mode === "pagerank" && metrics) {
-    const score = metrics.pagerank.get(n.id) ?? 0;
-    return base + score * 28;
+    const pct = metrics.pagerankPercentile.get(n.id) ?? 0;
+    // 0..1 percentile → up to +10px (smooth curve so top 20% balloons)
+    return base + Math.pow(pct, 1.6) * 10;
+  }
+  if (mode === "betweenness" && metrics) {
+    const score = metrics.betweenness.get(n.id) ?? 0;
+    return base + Math.min(score * 18, 8);
   }
   return base;
 }
