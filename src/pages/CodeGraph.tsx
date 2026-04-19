@@ -427,27 +427,78 @@ const CodeGraph = () => {
         </div>
       </header>
 
-      {/* ── Analysis mode toggle ── */}
+      {/* ── Abstraction level + Analysis mode toggles ── */}
       {!isEmpty && (
-        <div className="pointer-events-auto absolute left-1/2 top-[68px] z-20 -translate-x-1/2 flex items-center gap-1 rounded-full border p-1 shadow-paper" style={GLASS}>
-          {MODES.map((m) => {
-            const active = analysisMode === m.id;
-            return (
-              <button
-                key={m.id}
-                onClick={() => setAnalysisMode(m.id)}
-                className="rounded-full px-3 py-1 font-mono text-[10px] transition-all"
-                style={{
-                  background: active ? "rgba(45,170,160,0.12)" : "transparent",
-                  color: active ? T.accent : T.muted,
-                  border: active ? `1px solid rgba(45,170,160,0.35)` : "1px solid transparent",
-                  fontWeight: active ? 600 : 400,
-                }}
-              >
-                {m.label}
-              </button>
-            );
-          })}
+        <div className="pointer-events-auto absolute left-1/2 top-[68px] z-20 -translate-x-1/2 flex flex-col items-center gap-2">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 rounded-full border p-1 shadow-paper" style={GLASS}>
+              {LEVELS.map((l) => {
+                const active = abstractionLevel === l.id;
+                return (
+                  <button
+                    key={l.id}
+                    onClick={() => handleLevelChange(l.id)}
+                    className="rounded-full px-3 py-1 font-mono text-[10px] transition-all"
+                    style={{
+                      background: active ? "rgba(160,138,110,0.18)" : "transparent",
+                      color: active ? T.ink : T.muted,
+                      border: active ? `1px solid ${T.border}` : "1px solid transparent",
+                      fontWeight: active ? 600 : 400,
+                    }}
+                    title={
+                      l.id === "module" ? "High-level folders only"
+                      : l.id === "file" ? "File-to-file imports"
+                      : "Full detail (files, classes, functions)"
+                    }
+                  >
+                    {l.label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-1 rounded-full border p-1 shadow-paper" style={GLASS}>
+              {MODES.map((m) => {
+                const active = analysisMode === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => setAnalysisMode(m.id)}
+                    className="rounded-full px-3 py-1 font-mono text-[10px] transition-all"
+                    style={{
+                      background: active ? "rgba(45,170,160,0.12)" : "transparent",
+                      color: active ? T.accent : T.muted,
+                      border: active ? `1px solid rgba(45,170,160,0.35)` : "1px solid transparent",
+                      fontWeight: active ? 600 : 400,
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {focusStack.length > 0 && (
+            <div className="flex items-center gap-1.5 rounded-full border px-3 py-1 shadow-paper font-mono text-[10px]" style={GLASS}>
+              {crumbs.map((c, i) => (
+                <span key={i} className="flex items-center gap-1.5">
+                  {i > 0 && <span style={{ color: T.dim }}>›</span>}
+                  {c.isLast ? (
+                    <span style={{ color: T.ink, fontWeight: 600 }}>{c.label}</span>
+                  ) : (
+                    <button
+                      onClick={c.onClick}
+                      className="transition-colors"
+                      style={{ color: T.muted }}
+                      onMouseEnter={(e) => (e.currentTarget.style.color = T.accent)}
+                      onMouseLeave={(e) => (e.currentTarget.style.color = T.muted)}
+                    >
+                      {c.label}
+                    </button>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
