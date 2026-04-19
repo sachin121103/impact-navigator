@@ -187,7 +187,15 @@ const CodeGraph = () => {
         },
       });
       const json = (await r.json()) as GraphPayload & {
-        _meta?: { owner: string; name: string; branch: string; file_count: number };
+        _meta?: {
+          owner: string;
+          name: string;
+          branch: string;
+          file_count: number;
+          parsed_file_count?: number;
+          candidate_file_count?: number;
+          skipped_extensions?: Record<string, number>;
+        };
         error?: string;
       };
       if (!r.ok || json.error) throw new Error(json.error ?? `${r.status}`);
