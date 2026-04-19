@@ -295,8 +295,19 @@ export const CodeGraphCanvas = ({
     const zoneMembersByKey = new Map<string, SimNode[]>();
     for (const z of zoneList) zoneMembersByKey.set(z.key, z.members);
 
+    // Pre-bucket links by type so we can build one path per type per tick.
+    const linksByType = new Map<EdgeType, SimLink[]>();
+    for (const l of links) {
+      const arr = linksByType.get(l.type);
+      if (arr) arr.push(l);
+      else linksByType.set(l.type, [l]);
+    }
+
     let lastZone = 0;
+    let lastCull = 0;
+    let tickCounter = 0;
     let settledTimer: ReturnType<typeof setTimeout> | null = null;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
     const updateZoneRects = () => {
       if (!showZones) return;
@@ -328,17 +339,43 @@ export const CodeGraphCanvas = ({
       }
     };
 
-    sim.on("tick", () => {
+    // Compute viewport-cull set using current pan/zoom transform.
+    const updateCulling = () => {
+      const culled = culledRef.current;
+      const t = transformRef.current;
+      // Convert screen viewport to graph coords: graphX = (screenX - tx) / k
+      const k = t.k || 1;
+      const margin = 80; // px buffer in screen space
+      const x0 = (-t.x - margin) / k;
+      const y0 = (-t.y - margin) / k;
+      const x1 = (size.w - t.x + margin) / k;
+      const y1 = (size.h - t.y + margin) / k;
+      const next = new Set<string>();
       for (const n of nodes) {
-        if (n.x == null) continue;
-        nodeRefs.current
-          .get(n.id)
-          ?.setAttribute("transform", `translate(${n.x},${n.y})`);
+        if (n.x == null || n.y == null) continue;
+        if (n.x < x0 || n.x > x1 || n.y < y0 || n.y > y1) next.add(n.id);
       }
-      for (let i = 0; i < links.length; i++) {
-        const el = linkRefs.current.get(String(i));
-        if (!el) continue;
-        const l = links[i];
+      // Diff-apply display:none.
+      for (const id of next) {
+        if (!culled.has(id)) {
+          const el = nodeRefs.current.get(id);
+          if (el) el.style.display = "none";
+        }
+      }
+      for (const id of culled) {
+        if (!next.has(id)) {
+          const el = nodeRefs.current.get(id);
+          if (el) el.style.display = "";
+        }
+      }
+      culledRef.current = next;
+    };
+
+    const buildEdgePath = (arr: SimLink[]) => {
+      // Simple line segments concatenated into one path.
+      let d = "";
+      for (let i = 0; i < arr.length; i++) {
+        const l = arr[i];
         const s = l.source as SimNode;
         const t = l.target as SimNode;
         if (s.x == null || t.x == null) continue;
@@ -346,15 +383,67 @@ export const CodeGraphCanvas = ({
         const dy = t.y - s.y;
         const dist = Math.sqrt(dx * dx + dy * dy) || 1;
         const tr = l.type === "contains" ? 0 : nodeR(t) + 2;
-        el.setAttribute("x1", String(s.x));
-        el.setAttribute("y1", String(s.y));
-        el.setAttribute("x2", String(t.x - (dx / dist) * tr));
-        el.setAttribute("y2", String(t.y - (dy / dist) * tr));
+        const tx = t.x - (dx / dist) * tr;
+        const ty = t.y - (dy / dist) * tr;
+        d += `M${s.x.toFixed(1)},${s.y.toFixed(1)}L${tx.toFixed(1)},${ty.toFixed(1)}`;
       }
+      return d;
+    };
+
+    const updateEdgePaths = () => {
+      const skipContains = nodes.length > 1000;
+      for (const [type, arr] of linksByType) {
+        if (type === "contains" && skipContains) continue;
+        const el = edgePathRefs.current.get(type);
+        if (!el) continue;
+        el.setAttribute("d", buildEdgePath(arr));
+      }
+      // Highlight overlay
+      const overlay = edgeOverlayRef.current;
+      if (overlay) {
+        const hl = highlightRef.current;
+        if (!hl) {
+          overlay.setAttribute("d", "");
+        } else {
+          let d = "";
+          for (const l of links) {
+            const s = l.source as SimNode;
+            const t = l.target as SimNode;
+            if (s.x == null || t.x == null) continue;
+            if (!hl.has(s.id) || !hl.has(t.id)) continue;
+            if (l.type === "contains") continue;
+            const dx = t.x - s.x;
+            const dy = t.y - s.y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            const tr = nodeR(t) + 2;
+            const tx = t.x - (dx / dist) * tr;
+            const ty = t.y - (dy / dist) * tr;
+            d += `M${s.x.toFixed(1)},${s.y.toFixed(1)}L${tx.toFixed(1)},${ty.toFixed(1)}`;
+          }
+          overlay.setAttribute("d", d);
+        }
+      }
+    };
+
+    const onTick = () => {
+      tickCounter++;
+      for (const n of nodes) {
+        if (n.x == null) continue;
+        nodeRefs.current
+          .get(n.id)
+          ?.setAttribute("transform", `translate(${n.x},${n.y})`);
+      }
+      updateEdgePaths();
+
       const now = Date.now();
       if (now - lastZone > 120) {
         lastZone = now;
         updateZoneRects();
+      }
+      // Re-evaluate culling every 4 ticks (cheap diff).
+      if (tickCounter % 4 === 0 && now - lastCull > 80) {
+        lastCull = now;
+        updateCulling();
       }
 
       // Trigger a single React rerender after the simulation cools — this is
@@ -363,15 +452,30 @@ export const CodeGraphCanvas = ({
       if (sim.alpha() < 0.05) {
         settledTimer = setTimeout(() => {
           updateZoneRects();
+          updateCulling();
           setLayoutVersion((v) => v + 1);
         }, 200);
       }
-    });
+
+      // Idle-stop: when alpha is very low for 500ms, stop the simulation entirely.
+      if (idleTimer) clearTimeout(idleTimer);
+      if (sim.alpha() < 0.02) {
+        idleTimer = setTimeout(() => sim.stop(), 500);
+      }
+    };
+
+    sim.on("tick", onTick);
+
+    // Expose a restart hook on the sim for external triggers (zoom/hover).
+    (sim as unknown as { __restart?: () => void }).__restart = () => {
+      if (sim.alpha() < 0.05) sim.alpha(0.1).restart();
+    };
 
     simRef.current = sim;
     return () => {
       sim.stop();
       if (settledTimer) clearTimeout(settledTimer);
+      if (idleTimer) clearTimeout(idleTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, links, size.w, size.h, zoneAnchors, zoneByNodeId, physics, showZones, zoneList]);
