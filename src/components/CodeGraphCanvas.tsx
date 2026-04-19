@@ -719,46 +719,43 @@ export const CodeGraphCanvas = ({
             })}
           </g>
 
-          {/* Edges */}
+          {/* Edges — one <path> per type, geometry rebuilt in tick. */}
           <g>
-            {links.map((l, i) => {
-              const s = l.source as SimNode;
-              const t = l.target as SimNode;
-              const isContains = l.type === "contains";
-              // Skip "contains" edges entirely on very large graphs — they add the
-              // most DOM with the least signal.
-              if (isContains && nodes.length > 1000) return null;
-              const lit = finalHighlight
-                ? finalHighlight.has(s.id) && finalHighlight.has(t.id)
-                : true;
-              const base = EDGE_BASE_OPACITY[l.type];
-              const focusHide = focusMode && finalHighlight && !lit;
-              const opacity = focusHide
-                ? 0.03
-                : isContains
-                ? (finalHighlight ? (lit ? 0.15 : 0.02) : 0.1)
-                : lit
-                  ? (finalHighlight ? Math.min(0.9, base * 1.6) : base)
-                  : (finalHighlight ? 0.04 : base * 0.5);
-              const useEdgeFilter = lit && !isContains && links.length <= HEAVY_EDGE_COUNT;
+            {(["contains", "imports", "calls", "include"] as EdgeType[]).map((t) => {
+              if (t === "contains" && nodes.length > 1000) return null;
+              const isContains = t === "contains";
+              const dimmed = !!finalHighlight;
+              const baseOpacity = isContains
+                ? (dimmed ? 0.04 : EDGE_BASE_OPACITY[t])
+                : (dimmed ? 0.06 : EDGE_BASE_OPACITY[t] * 0.85);
               return (
-                <line
-                  key={i}
+                <path
+                  key={t}
                   ref={(el) => {
-                    if (el) linkRefs.current.set(String(i), el);
-                    else linkRefs.current.delete(String(i));
+                    if (el) edgePathRefs.current.set(t, el);
+                    else edgePathRefs.current.delete(t);
                   }}
-                  x1={0} y1={0} x2={0} y2={0}
-                  stroke={EDGE_COLOR[l.type]}
-                  strokeWidth={isContains ? 0.4 : l.type === "imports" ? 1.2 : 0.8}
-                  strokeDasharray={l.type === "calls" ? "4 3" : undefined}
-                  opacity={opacity}
-                  markerEnd={!isContains ? `url(#arrow-${l.type})` : undefined}
-                  filter={useEdgeFilter ? "url(#edge-highlight)" : undefined}
-                  style={{ transition: "opacity 150ms" }}
+                  d=""
+                  fill="none"
+                  stroke={EDGE_COLOR[t]}
+                  strokeWidth={isContains ? 0.4 : t === "imports" ? 1.1 : 0.8}
+                  strokeDasharray={t === "calls" ? "4 3" : undefined}
+                  opacity={baseOpacity}
+                  style={{ transition: "opacity 200ms", pointerEvents: "none" }}
                 />
               );
             })}
+            {/* Highlight overlay — single path drawn over the bulk edges. */}
+            <path
+              ref={(el) => { edgeOverlayRef.current = el; }}
+              d=""
+              fill="none"
+              stroke="hsl(184,68%,34%)"
+              strokeWidth={1.6}
+              opacity={finalHighlight ? 0.85 : 0}
+              filter={links.length <= HEAVY_EDGE_COUNT ? "url(#edge-highlight)" : undefined}
+              style={{ transition: "opacity 150ms", pointerEvents: "none" }}
+            />
           </g>
 
           {/* Nodes */}
