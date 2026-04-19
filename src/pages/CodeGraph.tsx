@@ -76,7 +76,13 @@ const CodeGraph = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [meta, setMeta] = useState<{
-    owner: string; name: string; branch: string; file_count: number;
+    owner: string;
+    name: string;
+    branch: string;
+    file_count: number;
+    parsed_file_count?: number;
+    candidate_file_count?: number;
+    skipped_extensions?: Record<string, number>;
   } | null>(null);
   const [hasLoadedRepo, setHasLoadedRepo] = useState(false);
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("none");
@@ -181,7 +187,15 @@ const CodeGraph = () => {
         },
       });
       const json = (await r.json()) as GraphPayload & {
-        _meta?: { owner: string; name: string; branch: string; file_count: number };
+        _meta?: {
+          owner: string;
+          name: string;
+          branch: string;
+          file_count: number;
+          parsed_file_count?: number;
+          candidate_file_count?: number;
+          skipped_extensions?: Record<string, number>;
+        };
         error?: string;
       };
       if (!r.ok || json.error) throw new Error(json.error ?? `${r.status}`);
@@ -514,6 +528,9 @@ const CodeGraph = () => {
                 {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Map repo"}
               </button>
             </div>
+            <p className="mt-2.5 font-mono text-[10px] tracking-wide" style={{ color: T.dim }}>
+              Supports Python · JS / TS · C / C++ · Java
+            </p>
             <button
               onClick={() => setHasLoadedRepo(true)}
               className="mt-4 font-mono text-[11px] uppercase tracking-widest transition-colors"
@@ -532,6 +549,34 @@ const CodeGraph = () => {
         <div className="pointer-events-auto absolute left-1/2 top-[68px] z-10 -translate-x-1/2 rounded-full border px-4 py-1.5 font-mono text-xs shadow-paper"
           style={{ ...GLASS, color: T.red, borderColor: "rgba(200,60,50,0.3)" }}>
           ⚠ {error}
+        </div>
+      )}
+
+      {/* ── Low-coverage banner: most of the repo wasn't parseable ── */}
+      {!isEmpty && !error && meta && (meta.parsed_file_count ?? meta.file_count) < 3 && (
+        <div className="pointer-events-auto absolute left-1/2 top-[110px] z-10 -translate-x-1/2 max-w-xl rounded-2xl border px-4 py-2.5 shadow-paper"
+          style={{ ...GLASS, borderColor: "rgba(217,153,32,0.4)" }}>
+          <div className="flex items-start gap-2.5">
+            <span className="font-mono text-sm leading-none mt-0.5" style={{ color: T.amber }}>△</span>
+            <div className="min-w-0">
+              <p className="font-mono text-[11px] leading-snug" style={{ color: T.ink }}>
+                Only <span style={{ color: T.amber, fontWeight: 600 }}>{meta.parsed_file_count ?? meta.file_count}</span> source file{(meta.parsed_file_count ?? meta.file_count) === 1 ? "" : "s"} recognised in this repo.
+              </p>
+              <p className="mt-1 font-mono text-[10px]" style={{ color: T.muted }}>
+                Meridian currently parses Python, JS / TS, C / C++, and Java.
+                {meta.skipped_extensions && Object.keys(meta.skipped_extensions).length > 0 && (
+                  <>
+                    {" "}Skipped:{" "}
+                    {Object.entries(meta.skipped_extensions)
+                      .sort((a, b) => b[1] - a[1])
+                      .slice(0, 4)
+                      .map(([ext, n]) => `${n}× ${ext}`)
+                      .join(", ")}.
+                  </>
+                )}
+              </p>
+            </div>
+          </div>
         </div>
       )}
 

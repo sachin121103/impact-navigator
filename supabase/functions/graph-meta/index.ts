@@ -55,6 +55,16 @@ const KEEP_EXT = new Set([
   ".py", ".ipynb",
   ".c", ".h", ".cpp", ".hpp", ".cc",
   ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+  ".java",
+]);
+// Extensions Meridian recognises but currently chooses not to parse — used only
+// for the "skipped extensions" report so the user knows what was dropped.
+const REPORTABLE_SKIPPED = new Set([
+  ".go", ".rs", ".rb", ".kt", ".kts", ".swift", ".scala", ".php",
+  ".cs", ".m", ".mm", ".dart", ".lua", ".sh", ".pl",
+  ".html", ".css", ".scss", ".vue", ".svelte",
+  ".xml", ".yml", ".yaml", ".toml", ".ini", ".properties",
+  ".sql", ".graphql", ".proto",
 ]);
 
 function shouldSkip(rel: string): boolean {
@@ -88,7 +98,7 @@ function tstr(buf: Uint8Array, off: number, len: number): string {
 async function readTarGz(
   url: string,
   maxFiles = 600,
-): Promise<{ path: string; content: string }[]> {
+): Promise<{ files: { path: string; content: string }[]; skippedExt: Record<string, number>; totalCandidate: number }> {
   const res = await fetch(url, { redirect: "follow" });
   if (!res.ok || !res.body) {
     throw new Error(`Tarball fetch failed: ${res.status}`);
@@ -124,6 +134,8 @@ async function readTarGz(
   }
 
   const out: { path: string; content: string }[] = [];
+  const skippedExt: Record<string, number> = {};
+  let totalCandidate = 0;
   let pos = 0;
   let longName: string | null = null;
   const td = new TextDecoder("utf-8", { fatal: false });
@@ -164,14 +176,20 @@ async function readTarGz(
     const rel = name.split("/").slice(1).join("/");
     if (!rel || rel.endsWith("/")) continue;
     if (shouldSkip(rel)) continue;
+    totalCandidate++;
     const dot = rel.lastIndexOf(".");
     const ext = dot >= 0 ? rel.slice(dot).toLowerCase() : "";
-    if (!KEEP_EXT.has(ext)) continue;
+    if (!KEEP_EXT.has(ext)) {
+      if (REPORTABLE_SKIPPED.has(ext)) {
+        skippedExt[ext] = (skippedExt[ext] ?? 0) + 1;
+      }
+      continue;
+    }
 
     out.push({ path: rel, content: td.decode(data) });
     if (out.length >= maxFiles) break;
   }
-  return out;
+  return { files: out, skippedExt, totalCandidate };
 }
 
 // ---------- Python parser (regex-based; AST not available in Deno) ---------
@@ -318,6 +336,119 @@ function cFnBodies(src: string): { name: string; body: string }[] {
     }
   }
   return out;
+}
+
+// ---------- Java parser ----------------------------------------------------
+// Regex/brace-matching, mirrors the C++ extractor pattern. Captures classes,
+// methods (qualified Class.method), import statements, and method-body calls.
+const JAVA_RESERVED = new Set([
+  "if", "else", "for", "while", "do", "switch", "case", "default",
+  "return", "break", "continue", "throw", "throws", "try", "catch", "finally",
+  "new", "instanceof", "super", "this", "null", "true", "false",
+  "public", "private", "protected", "static", "final", "abstract", "synchronized",
+  "volatile", "transient", "native", "strictfp",
+  "class", "interface", "enum", "extends", "implements", "package", "import",
+  "void", "int", "long", "short", "byte", "float", "double", "boolean", "char",
+  "String", "Integer", "Long", "Float", "Double", "Boolean", "Object", "System",
+  "println", "print", "printf",
+  "assert", "record",
+]);
+
+const JAVA_IMPORT_RE = /^\s*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;/gm;
+const JAVA_CLASS_RE = /\b(?:public\s+|private\s+|protected\s+|static\s+|final\s+|abstract\s+)*(?:class|interface|enum|record)\s+([A-Z][\w$]*)[^{;]*\{/g;
+const JAVA_CALL_RE = /\b([A-Za-z_$][\w$]*)\s*\(/g;
+// Method declaration inside a class body. Heuristic — matches identifier(...) {
+// preceded by modifiers/return type, but skip control-flow keywords.
+const JAVA_METHOD_RE = /(?:^|[\n;{}])\s*(?:(?:public|private|protected|static|final|abstract|synchronized|native|default)\s+)*(?:<[^>]+>\s+)?[A-Za-z_$][\w$<>,.\s\[\]?]*\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?:throws\s+[\w.,\s]+)?\{/g;
+
+interface JavaParsed {
+  classes: string[];
+  methods: string[];
+  imports: string[];
+  calls: [string, string][];
+}
+
+function parseJava(rawSrc: string): JavaParsed {
+  // Reuse JS noise stripper — handles // /* */ "..." correctly. Java has no
+  // template literals so the backtick branch is dormant.
+  const src = stripJsNoise(rawSrc);
+  const out: JavaParsed = { classes: [], methods: [], imports: [], calls: [] };
+
+  let m: RegExpExecArray | null;
+  const reImp = new RegExp(JAVA_IMPORT_RE.source, "gm");
+  while ((m = reImp.exec(src)) !== null) out.imports.push(m[1]);
+
+  type Decl = { qname: string; bodyStart: number; bodyEnd: number };
+  const decls: Decl[] = [];
+
+  const reCls = new RegExp(JAVA_CLASS_RE.source, "g");
+  while ((m = reCls.exec(src)) !== null) {
+    const clsName = m[1];
+    out.classes.push(clsName);
+    const open = m.index + m[0].length - 1;
+    const close = matchBrace(src, open);
+    const body = src.slice(open + 1, close);
+
+    const reMethod = new RegExp(JAVA_METHOD_RE.source, "g");
+    let mm: RegExpExecArray | null;
+    while ((mm = reMethod.exec(body)) !== null) {
+      const mname = mm[1];
+      if (JAVA_RESERVED.has(mname)) continue;
+      if (mname === clsName) continue; // constructor — already accounted by class node
+      const localOpen = mm.index + mm[0].length - 1;
+      const absOpen = open + 1 + localOpen;
+      const absClose = matchBrace(src, absOpen);
+      decls.push({ qname: `${clsName}.${mname}`, bodyStart: absOpen, bodyEnd: absClose });
+      out.methods.push(`${clsName}.${mname}`);
+    }
+  }
+
+  decls.sort((a, b) => a.bodyStart - b.bodyStart);
+  for (const d of decls) {
+    const re = new RegExp(JAVA_CALL_RE.source, "g");
+    re.lastIndex = d.bodyStart + 1;
+    let cm: RegExpExecArray | null;
+    while ((cm = re.exec(src)) !== null) {
+      if (cm.index >= d.bodyEnd) break;
+      const callee = cm[1];
+      if (JAVA_RESERVED.has(callee)) continue;
+      let innermost = d;
+      for (const e of decls) {
+        if (e === d) continue;
+        if (e.bodyStart > d.bodyStart && e.bodyEnd <= d.bodyEnd &&
+            e.bodyStart <= cm.index && cm.index < e.bodyEnd) {
+          if (e.bodyStart > innermost.bodyStart) innermost = e;
+        }
+      }
+      if (innermost === d) out.calls.push([d.qname, callee]);
+    }
+  }
+
+  return out;
+}
+
+// Index repo .java files by simple class name (file basename) for import resolution.
+function buildJavaClassIndex(files: { path: string; content: string }[]): Map<string, string> {
+  const idx = new Map<string, string>();
+  for (const f of files) {
+    if (!f.path.toLowerCase().endsWith(".java")) continue;
+    const base = f.path.split("/").pop()!.replace(/\.java$/i, "");
+    if (!idx.has(base)) idx.set(base, f.path);
+  }
+  return idx;
+}
+
+function resolveJavaImport(spec: string, classIdx: Map<string, string>): string | null {
+  // "com.foo.bar.Artist" or static "com.foo.bar.Artist.METHOD" — walk segments
+  // right→left, return first capital-starting segment present in the index.
+  const parts = spec.split(".");
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const candidate = parts[i];
+    if (candidate && /^[A-Z]/.test(candidate) && classIdx.has(candidate)) {
+      return classIdx.get(candidate)!;
+    }
+  }
+  return null;
 }
 
 // ---------- JS / TS parser -------------------------------------------------
@@ -562,6 +693,8 @@ function buildGraph(files: { path: string; content: string }[]): {
 
   const fnIndex: Record<string, string> = {};
   const pendingCalls: [string, string][] = [];
+  // Java import resolution needs a class-name → file index built up front.
+  const javaClassIdx = buildJavaClassIndex(files);
 
   for (const f of files) {
     const ext = f.path.slice(f.path.lastIndexOf(".")).toLowerCase();
@@ -624,6 +757,34 @@ function buildGraph(files: { path: string; content: string }[]): {
         )) {
           edges.push({ source: f.path, target: matched, type: "include" });
         }
+      }
+    } else if (ext === ".java") {
+      const p = parseJava(f.content);
+      for (const cls of p.classes) {
+        const id = `${f.path}::${cls}`;
+        if (!nodes.some((n) => n.id === id)) {
+          nodes.push({ id, type: "class", file: f.path, name: cls });
+        }
+      }
+      for (const qn of p.methods) {
+        const id = `${f.path}::${qn}`;
+        if (!nodes.some((n) => n.id === id)) {
+          nodes.push({ id, type: "function", file: f.path, name: qn });
+        }
+        fnIndex[qn] = id;
+        const bare = qn.split(".").pop()!;
+        if (!(bare in fnIndex)) fnIndex[bare] = id;
+      }
+      for (const spec of new Set(p.imports)) {
+        const target = resolveJavaImport(spec, javaClassIdx);
+        if (target && target !== f.path && !edges.some(
+          (e) => e.source === f.path && e.target === target && e.type === "imports",
+        )) {
+          edges.push({ source: f.path, target, type: "imports" });
+        }
+      }
+      for (const [caller, callee] of p.calls) {
+        pendingCalls.push([`${f.path}::${caller}`, callee]);
       }
     }
     else if (
@@ -753,11 +914,16 @@ Deno.serve(async (req) => {
 
     // Try main, then master
     let files: { path: string; content: string }[] = [];
+    let skippedExt: Record<string, number> = {};
+    let totalCandidate = 0;
     let usedBranch = "main";
     for (const branch of ["main", "master"]) {
       try {
         const tarUrl = `https://codeload.github.com/${owner}/${name}/tar.gz/refs/heads/${branch}`;
-        files = await readTarGz(tarUrl);
+        const r = await readTarGz(tarUrl);
+        files = r.files;
+        skippedExt = r.skippedExt;
+        totalCandidate = r.totalCandidate;
         usedBranch = branch;
         break;
       } catch (e) {
@@ -777,7 +943,19 @@ Deno.serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ nodes, edges, _meta: { owner, name, branch: usedBranch, file_count: files.length } }),
+      JSON.stringify({
+        nodes,
+        edges,
+        _meta: {
+          owner,
+          name,
+          branch: usedBranch,
+          file_count: files.length,
+          parsed_file_count: files.length,
+          candidate_file_count: totalCandidate,
+          skipped_extensions: skippedExt,
+        },
+      }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (e) {
