@@ -150,6 +150,13 @@ export const SentinelGraphCanvas = ({
         </filter>
       </defs>
 
+      <g
+        style={{
+          opacity: composing ? 0 : 1,
+          transition: "opacity 600ms ease-out",
+          willChange: "opacity",
+        }}
+      >
       {/* Edges — one <path> per kind */}
       <g style={{ willChange: "opacity" }}>
         <path
