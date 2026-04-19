@@ -978,7 +978,8 @@ export const CodeGraphCanvas = ({
                 // PageRank top-10%: outer glow ring
                 const prPct = analysisMode === "pagerank" && metrics
                   ? (metrics.pagerankPercentile.get(n.id) ?? 0) : 0;
-                const isTopPR = prPct >= 0.9;
+                const isTopPR = prPct >= 0.75;
+                const isVeryTopPR = prPct >= 0.9;
                 // Betweenness warning threshold
                 const btScore = analysisMode === "betweenness" && metrics
                   ? (metrics.betweenness.get(n.id) ?? 0) : 0;
