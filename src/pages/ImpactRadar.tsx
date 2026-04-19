@@ -3,6 +3,8 @@ import { Loader2, Sparkles } from "lucide-react";
 import { SubPageShell } from "@/components/SubPageShell";
 import { ImpactInput } from "@/components/ImpactInput";
 import { RadarVisual } from "@/components/RadarVisual";
+import { RiskyFilesPanel } from "@/components/RiskyFilesPanel";
+import { CodeImpactPanel } from "@/components/CodeImpactPanel";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 
