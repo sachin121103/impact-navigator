@@ -113,32 +113,54 @@ const CRIT_META: Record<Criticality, { label: string; color: string; bg: string;
   },
 };
 
+type ChangeKind = "delete" | "rename" | "signature" | "behavior";
+
 /**
- * Criticality of a described change = function of the target's centrality
- * (fan_in of the resolved symbol) and the blast radius (how many downstream
- * symbols are affected, weighted by how shallow they sit in the call graph).
+ * Criticality of a described change combines:
+ *   - target centrality (fan_in)
+ *   - blast radius (total + shallow callers)
+ *   - change kind (delete/rename/signature break ALL callers; behavior may not)
+ *
+ * A "delete" or "rename" against a symbol with even a few callers is critical,
+ * because every call site is guaranteed to break. A "behavior" change with the
+ * same fan_in is much softer.
  */
 const computeCriticality = (
   affected: AffectedSymbol[],
   targetFanIn: number,
+  changeKind: ChangeKind = "behavior",
 ): { level: Criticality; reasons: string[] } => {
   const total = affected.length;
-  // Shallow callers (depth ≤ 2) matter much more than deep transitive ones.
   const shallow = affected.filter((a) => a.depth <= 2).length;
-  const isCoreTarget = targetFanIn >= 8;
-  const isWidelyUsedTarget = targetFanIn >= 3;
+  const breaksAllCallers = changeKind === "delete" || changeKind === "rename" || changeKind === "signature";
+
+  // Severity score, 0–100. Each signal contributes; change kind is a multiplier.
+  let score = 0;
+  score += Math.min(40, targetFanIn * 5);          // centrality (caps at fan_in 8)
+  score += Math.min(30, shallow * 4);              // immediate blast
+  score += Math.min(20, total * 0.8);              // total reach
+  if (breaksAllCallers) score *= 1.6;              // every caller breaks, not just maybe
+  if (changeKind === "delete") score += 10;        // deletion is the hardest break
 
   const reasons: string[] = [];
-  if (isCoreTarget) reasons.push(`target is a core symbol (${targetFanIn} direct callers)`);
-  else if (isWidelyUsedTarget) reasons.push(`target is used by ${targetFanIn} other symbols`);
-  if (total > 0) reasons.push(`${total} downstream symbols affected`);
-  if (shallow > 0) reasons.push(`${shallow} are immediate callers`);
+  if (changeKind === "delete") reasons.push("deletion breaks every caller");
+  else if (changeKind === "rename") reasons.push("rename breaks every caller until updated");
+  else if (changeKind === "signature") reasons.push("signature change breaks every caller");
+  if (targetFanIn >= 8) reasons.push(`core symbol (${targetFanIn} direct callers)`);
+  else if (targetFanIn >= 3) reasons.push(`used by ${targetFanIn} other symbols`);
+  else if (targetFanIn > 0) reasons.push(`${targetFanIn} direct caller${targetFanIn === 1 ? "" : "s"}`);
+  if (total > 0) reasons.push(`${total} downstream symbol${total === 1 ? "" : "s"} affected`);
+  if (shallow > 0) reasons.push(`${shallow} immediate`);
 
   let level: Criticality;
-  if (isCoreTarget || total >= 25 || shallow >= 8) level = "critical";
-  else if (isWidelyUsedTarget || total >= 10 || shallow >= 3) level = "significant";
-  else if (total >= 3) level = "moderate";
+  if (score >= 60) level = "critical";
+  else if (score >= 35) level = "significant";
+  else if (score >= 15) level = "moderate";
   else level = "minor";
+
+  // Hard floors: a delete/rename/signature with any caller cannot be "minor".
+  if (breaksAllCallers && total >= 1 && level === "minor") level = "moderate";
+  if (breaksAllCallers && (targetFanIn >= 5 || shallow >= 5)) level = "critical";
 
   return { level, reasons };
 };
@@ -418,6 +440,7 @@ const ImpactRadar = () => {
             const { level, reasons } = computeCriticality(
               radarState.data.affected,
               (radarState.data as any).resolvedSymbol?.fan_in ?? 0,
+              ((radarState.data as any).changeKind ?? "behavior") as ChangeKind,
             );
             const meta = CRIT_META[level];
             return (
