@@ -152,9 +152,18 @@ export const CodeGraphCanvas = ({
   const simRef = useRef<Simulation<SimNode, SimLink> | null>(null);
   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const nodeRefs = useRef<Map<string, SVGGElement>>(new Map());
-  const linkRefs = useRef<Map<string, SVGLineElement>>(new Map());
+  // One <path> per edge style — bulk geometry. Hover overlay is separate.
+  const edgePathRefs = useRef<Map<EdgeType, SVGPathElement>>(new Map());
+  const edgeOverlayRef = useRef<SVGPathElement | null>(null);
   const zoneRectRefs = useRef<Map<string, SVGRectElement>>(new Map());
   const zoneLabelRefs = useRef<Map<string, SVGGElement>>(new Map());
+  // Pan/zoom transform for viewport culling.
+  const transformRef = useRef<{ k: number; x: number; y: number }>({ k: 1, x: 0, y: 0 });
+  // Track which nodes are off-screen (for culling).
+  const culledRef = useRef<Set<string>>(new Set());
+  // Active highlight set, kept in a ref so the tick loop can rebuild the overlay
+  // path without re-subscribing to the simulation.
+  const highlightRef = useRef<Set<string> | null>(null);
 
   const [size, setSize] = useState({ w: 800, h: 640 });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
