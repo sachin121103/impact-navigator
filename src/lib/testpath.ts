@@ -299,6 +299,142 @@ export function findDeadCode(graph: GraphPayload): DeadEntry[] {
   return out;
 }
 
+// ─── Test proposals ───────────────────────────────────────────────────────────
+// Given a target symbol, suggest tests that *should* exist to cover it and its
+// direct collaborators. Pure heuristic — no LLM, no I/O.
+export interface TestProposal {
+  id: string;            // stable key for React lists
+  target_id: string;     // node being tested
+  target_name: string;
+  target_file: string;
+  suggested_file: string;
+  suggested_name: string;
+  rationale: string;
+  kind: "unit" | "integration" | "smoke";
+  priority: "high" | "medium" | "low";
+}
+
+function suggestedTestPath(file: string): string {
+  // src/foo/bar.py → tests/foo/test_bar.py
+  // src/foo/Bar.ts → src/foo/Bar.test.ts
+  if (/\.py$/.test(file)) {
+    const stripped = file.replace(/^src\//, "").replace(/\.py$/, "");
+    const parts = stripped.split("/");
+    const base = parts.pop() ?? "module";
+    return ["tests", ...parts, `test_${base}.py`].join("/");
+  }
+  if (/\.[tj]sx?$/.test(file)) {
+    return file.replace(/\.([tj]sx?)$/, ".test.$1");
+  }
+  return `tests/${file}.test`;
+}
+
+function snake(name: string): string {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^A-Za-z0-9]+/g, "_")
+    .toLowerCase()
+    .replace(/^_+|_+$/g, "");
+}
+
+export function proposeTests(
+  modifiedNodeId: string,
+  graph: GraphPayload,
+  ctx?: { nodesById?: Map<string, GraphNode>; forwardAdj?: Map<string, string[]>; reverseAdj?: Map<string, string[]> },
+): TestProposal[] {
+  const nodesById = ctx?.nodesById ?? indexNodes(graph.nodes);
+  const forwardAdj = ctx?.forwardAdj ?? buildForwardAdjacency(graph.edges);
+  const reverseAdj = ctx?.reverseAdj ?? buildReverseAdjacency(graph.edges);
+
+  const target = nodesById.get(modifiedNodeId);
+  if (!target) return [];
+
+  const proposals: TestProposal[] = [];
+  const suggestedFile = suggestedTestPath(target.file);
+  const baseName = snake(target.name.replace(/.*::/, "")) || "behavior";
+
+  // 1. Happy path
+  proposals.push({
+    id: `${target.id}::happy`,
+    target_id: target.id,
+    target_name: target.name,
+    target_file: target.file,
+    suggested_file: suggestedFile,
+    suggested_name: `test_${baseName}_happy_path`,
+    rationale: "Cover the typical successful invocation with representative inputs.",
+    kind: "unit",
+    priority: "high",
+  });
+
+  // 2. Edge cases
+  proposals.push({
+    id: `${target.id}::edges`,
+    target_id: target.id,
+    target_name: target.name,
+    target_file: target.file,
+    suggested_file: suggestedFile,
+    suggested_name: `test_${baseName}_edge_cases`,
+    rationale: "Empty / null / boundary inputs — these are usually where bugs hide.",
+    kind: "unit",
+    priority: "high",
+  });
+
+  // 3. Error path (if it's a function)
+  if (target.type !== "file") {
+    proposals.push({
+      id: `${target.id}::errors`,
+      target_id: target.id,
+      target_name: target.name,
+      target_file: target.file,
+      suggested_file: suggestedFile,
+      suggested_name: `test_${baseName}_raises_on_invalid`,
+      rationale: "Invalid inputs should fail loudly. Assert the error type and message.",
+      kind: "unit",
+      priority: "medium",
+    });
+  }
+
+  // 4. Integration with each direct downstream collaborator
+  const downstream = (forwardAdj.get(modifiedNodeId) ?? [])
+    .map((id) => nodesById.get(id))
+    .filter((n): n is GraphNode => !!n && !isTestNode(n))
+    .slice(0, 4);
+  for (const dep of downstream) {
+    proposals.push({
+      id: `${target.id}::integ::${dep.id}`,
+      target_id: target.id,
+      target_name: target.name,
+      target_file: target.file,
+      suggested_file: suggestedFile,
+      suggested_name: `test_${baseName}_integrates_with_${snake(dep.name.replace(/.*::/, ""))}`,
+      rationale: `Verify the contract between \`${target.name}\` and its dependency \`${dep.name}\`.`,
+      kind: "integration",
+      priority: "medium",
+    });
+  }
+
+  // 5. Smoke test for each direct upstream caller (regression safety net)
+  const upstream = (reverseAdj.get(modifiedNodeId) ?? [])
+    .map((id) => nodesById.get(id))
+    .filter((n): n is GraphNode => !!n && !isTestNode(n))
+    .slice(0, 3);
+  for (const caller of upstream) {
+    proposals.push({
+      id: `${target.id}::smoke::${caller.id}`,
+      target_id: target.id,
+      target_name: target.name,
+      target_file: target.file,
+      suggested_file: suggestedTestPath(caller.file),
+      suggested_name: `test_${snake(caller.name.replace(/.*::/, ""))}_still_uses_${baseName}`,
+      rationale: `\`${caller.name}\` calls this — a smoke test there guards against regressions.`,
+      kind: "smoke",
+      priority: "low",
+    });
+  }
+
+  return proposals;
+}
+
 // ─── Exporters ────────────────────────────────────────────────────────────────
 export function exportPlanJson(plan: TestPlan): string {
   return JSON.stringify(

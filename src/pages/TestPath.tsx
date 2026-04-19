@@ -21,6 +21,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { SAMPLE_GRAPH, type GraphPayload } from "@/lib/sample-graph";
 import {
   aggregatePlan,
+  buildForwardAdjacency,
   buildReverseAdjacency,
   buildTestPlan,
   coverageMetrics,
@@ -33,7 +34,9 @@ import {
   indexNodes,
   isTestNode,
   nodesForFiles,
+  proposeTests,
   type TestPlan,
+  type TestProposal,
 } from "@/lib/testpath";
 
 const TestPath = () => {
@@ -55,6 +58,7 @@ const TestPath = () => {
     () => ({
       nodesById: indexNodes(data.nodes),
       reverseAdj: buildReverseAdjacency(data.edges),
+      forwardAdj: buildForwardAdjacency(data.edges),
     }),
     [data],
   );
@@ -76,9 +80,9 @@ const TestPath = () => {
       .slice(0, 50);
   }, [codeNodes, search]);
 
-  const plan: TestPlan | null = useMemo(() => {
-    if (!modifiedId) return null;
-    return buildTestPlan(modifiedId, data, ctx);
+  const proposals: TestProposal[] = useMemo(() => {
+    if (!modifiedId) return [];
+    return proposeTests(modifiedId, data, ctx);
   }, [modifiedId, data, ctx]);
 
   const coveringIds = useMemo(() => {
@@ -93,6 +97,10 @@ const TestPath = () => {
     [coverage],
   );
   const dead = useMemo(() => findDeadCode(data), [data]);
+  const deadFunctions = useMemo(
+    () => dead.filter((d) => d.node.type === "function" || d.node.type === "class"),
+    [dead],
+  );
 
   const prPlan = useMemo(() => {
     const files = prFiles
@@ -143,7 +151,7 @@ const TestPath = () => {
       eyebrow="02 · testpath"
       title="TestPath."
       tagline="Run only what matters."
-      description="Pick a symbol you're about to change. TestPath walks the dependency graph backwards to find every test that exercises a path to it — then ranks them by distance, so you get a runnable plan instead of the full suite."
+      description="Pick a symbol you're about to ship. TestPath reads its place in the dependency graph and proposes the tests you should write — happy paths, edges, integration contracts with each collaborator, and regression smoke tests at every caller."
       visual={
         <div className="grid h-full w-full place-items-center">
           <div className="aspect-square w-[min(82vmin,720px)]">
@@ -205,11 +213,11 @@ const TestPath = () => {
               </TabsTrigger>
             </TabsList>
 
-            {/* ── PLAN ── Pick a symbol you're about to change → see only the tests that exercise it. */}
+            {/* ── PLAN ── Pick a symbol → propose tests that should exist for it. */}
             <TabsContent value="plan" className="mt-4 space-y-3">
               {!modifiedId && (
                 <p className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-xs text-muted-foreground">
-                  <span className="font-medium text-foreground">Smart test selection.</span> Pick the symbol you're about to change. We'll walk the graph backwards from it and list every test that reaches it — so you can run only those instead of the full suite.
+                  <span className="font-medium text-foreground">Test proposals.</span> Pick a symbol you're about to ship. We read its dependencies and callers from the graph and suggest the tests you should write — happy paths, edge cases, integration contracts, and regression smoke tests — with a ready-to-use file path and test name.
                 </p>
               )}
               <div className="relative">
@@ -244,13 +252,17 @@ const TestPath = () => {
                 </ul>
               )}
 
-              {plan && (
-                <PlanResult
-                  plan={plan}
-                  modifiedLabel={ctx.nodesById.get(modifiedId!)?.name ?? modifiedId!}
+              {modifiedId && (
+                <ProposalsResult
+                  proposals={proposals}
+                  modifiedLabel={ctx.nodesById.get(modifiedId)?.name ?? modifiedId}
                   onClear={() => setModifiedId(null)}
-                  onCopyJson={() => copy(exportPlanJson(plan), "JSON plan")}
-                  onCopyShell={() => copy(exportPlanShell(plan), "Shell command")}
+                  onCopyJson={() =>
+                    copy(
+                      JSON.stringify({ proposals }, null, 2),
+                      "JSON proposals",
+                    )
+                  }
                 />
               )}
             </TabsContent>
@@ -295,31 +307,38 @@ const TestPath = () => {
               </div>
             </TabsContent>
 
-            {/* ── DEAD CODE ── Symbols nothing else uses. */}
+            {/* ── DEAD CODE ── Functions nothing else calls. */}
             <TabsContent value="dead" className="mt-4 space-y-3">
               <p className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">Dead code.</span> Symbols nothing else points to: functions or classes with no callers outside their file, files that nobody imports, and tests that don't exercise anything.
+                <span className="font-medium text-foreground">Dead functions.</span> Functions or classes that nothing else calls from outside their own file. Click one to highlight it on the graph and see exactly where it lives.
               </p>
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <Stat label="dead" value={dead.length} tone={dead.length ? "destructive" : undefined} />
-                <Stat label="files" value={dead.filter((d) => d.reason === "no importers").length} />
-                <Stat label="symbols" value={dead.filter((d) => d.reason === "no callers").length} />
+              <div className="grid grid-cols-2 gap-2 text-center">
+                <Stat label="dead fns" value={deadFunctions.length} tone={deadFunctions.length ? "destructive" : undefined} />
+                <Stat label="of total" value={data.nodes.filter((n) => n.type === "function" || n.type === "class").length} />
               </div>
-              <ul className="max-h-[260px] space-y-1 overflow-auto rounded-md border border-border/60 p-1.5">
-                {dead.map((d) => (
-                  <li key={d.node.id} className="grid grid-cols-[1fr_auto] items-center gap-2 rounded px-2 py-1.5 text-xs">
-                    <div className="min-w-0">
-                      <p className="truncate">{d.node.name}</p>
-                      <p className="truncate font-mono text-[10px] text-muted-foreground">{d.node.file}</p>
-                    </div>
-                    <Badge variant="secondary" className="shrink-0 font-mono text-[9px]">
-                      {d.reason}
-                    </Badge>
-                  </li>
-                ))}
-                {dead.length === 0 && (
+              <ul className="max-h-[320px] space-y-1 overflow-auto rounded-md border border-border/60 p-1.5">
+                {deadFunctions.map((d) => {
+                  const active = modifiedId === d.node.id;
+                  return (
+                    <li key={d.node.id}>
+                      <button
+                        onClick={() => setModifiedId(d.node.id)}
+                        className={`grid w-full grid-cols-[1fr_auto] items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${active ? "bg-accent/15 ring-1 ring-accent/40" : "hover:bg-secondary"}`}
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate">{d.node.name}</p>
+                          <p className="truncate font-mono text-[10px] text-muted-foreground">{d.node.file}</p>
+                        </div>
+                        <Badge variant="secondary" className="shrink-0 font-mono text-[9px]">
+                          {d.node.type}
+                        </Badge>
+                      </button>
+                    </li>
+                  );
+                })}
+                {deadFunctions.length === 0 && (
                   <li className="px-2 py-3 text-center text-xs text-muted-foreground">
-                    nothing dead — clean graph ✨
+                    no dead functions — clean graph ✨
                   </li>
                 )}
               </ul>
@@ -355,6 +374,94 @@ const TestPath = () => {
 };
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
+const ProposalsResult = ({
+  proposals,
+  modifiedLabel,
+  onClear,
+  onCopyJson,
+}: {
+  proposals: TestProposal[];
+  modifiedLabel: string;
+  onClear: () => void;
+  onCopyJson: () => void;
+}) => {
+  const groups = useMemo(() => {
+    const g: Record<"high" | "medium" | "low", TestProposal[]> = {
+      high: [], medium: [], low: [],
+    };
+    for (const p of proposals) g[p.priority].push(p);
+    return g;
+  }, [proposals]);
+
+  return (
+    <div className="space-y-3 rounded-md border border-border/60 bg-background/40 p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-accent">target</p>
+          <p className="truncate font-display text-sm font-semibold">{modifiedLabel}</p>
+        </div>
+        <Button size="sm" variant="ghost" onClick={onClear} className="h-7 px-2 text-[11px]">
+          clear
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <Stat label="proposed" value={proposals.length} tone="accent" />
+        <Stat label="unit" value={proposals.filter((p) => p.kind === "unit").length} />
+        <Stat label="integration" value={proposals.filter((p) => p.kind === "integration").length} />
+      </div>
+
+      {proposals.length === 0 ? (
+        <p className="rounded border border-dashed border-border/60 px-3 py-4 text-center text-xs text-muted-foreground">
+          Nothing to propose.
+        </p>
+      ) : (
+        <div className="max-h-[280px] space-y-3 overflow-auto">
+          {(["high", "medium", "low"] as const).map((p) =>
+            groups[p].length === 0 ? null : (
+              <div key={p}>
+                <div className="mb-1 flex items-center gap-2 px-1">
+                  <Sparkles className="h-3 w-3 text-accent" />
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                    {p} priority · {groups[p].length}
+                  </span>
+                </div>
+                <ul className="space-y-1.5">
+                  {groups[p].map((pr) => (
+                    <li
+                      key={pr.id}
+                      className="space-y-1 rounded border border-border/40 bg-background/50 px-2.5 py-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate font-mono text-[11px]">{pr.suggested_name}</p>
+                        <Badge variant="secondary" className="shrink-0 font-mono text-[9px]">
+                          {pr.kind}
+                        </Badge>
+                      </div>
+                      <p className="truncate font-mono text-[10px] text-muted-foreground">
+                        {pr.suggested_file}
+                      </p>
+                      <p className="text-[11px] leading-snug text-muted-foreground">
+                        {pr.rationale}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ),
+          )}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <Button size="sm" variant="outline" className="flex-1 gap-1.5" onClick={onCopyJson} disabled={!proposals.length}>
+          <Copy className="h-3 w-3" /> JSON
+        </Button>
+      </div>
+    </div>
+  );
+};
+
 const PlanResult = ({
   plan,
   modifiedLabel,
