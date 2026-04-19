@@ -1,10 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 import { SubPageShell } from "@/components/SubPageShell";
 import { ImpactInput } from "@/components/ImpactInput";
 import { RadarVisual } from "@/components/RadarVisual";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
+
+interface Suggestion {
+  id: string;
+  why: string;
+  fix: string;
+}
+
+type SuggestState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; map: Record<string, Suggestion> };
 
 type RiskLevel = "high" | "medium" | "low";
 
