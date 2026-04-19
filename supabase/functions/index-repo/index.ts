@@ -668,19 +668,24 @@ Deno.serve(async (req) => {
       // Wipe previous data for this repo
       await supabase.from("symbols").delete().eq("repo_id", repoId);
 
-      // Fetch HEAD commit SHA (best-effort; used for incremental re-index detection)
+      // Fetch HEAD commit SHA (best-effort)
+      const commitHeaders: Record<string, string> = {
+        "User-Agent": "impact-radar-indexer",
+        Accept: "application/vnd.github+json",
+      };
+      if (githubToken) commitHeaders["Authorization"] = `token ${githubToken}`;
       const shaRes = await fetch(
         `https://api.github.com/repos/${owner}/${name}/commits/${branch}`,
-        { headers: { "User-Agent": "impact-radar-indexer", Accept: "application/vnd.github+json" } },
+        { headers: commitHeaders },
       );
       const commitSha: string | null = shaRes.ok ? ((await shaRes.json()) as any).sha ?? null : null;
 
       // Download tarball with master fallback
       let tarball: Uint8Array;
       try {
-        tarball = await fetchTarball(owner, name, branch);
+        tarball = await fetchTarball(owner, name, branch, githubToken);
       } catch {
-        tarball = await fetchTarball(owner, name, "master");
+        tarball = await fetchTarball(owner, name, "master", githubToken);
       }
       await supabase.from("repos").update({ status_message: "Parsing source files…" }).eq("id", repoId);
 
