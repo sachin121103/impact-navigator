@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.impact-analyze]
 verify_jwt = false
+
+[functions.impact-suggest]
+verify_jwt = false
