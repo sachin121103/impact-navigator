@@ -13,6 +13,20 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import tar from "npm:tar-stream@3.1.7";
+
+// Lightweight JWT payload decoder — extracts `sub`. Authorization for DB writes
+// is enforced by the userClient (Authorization header → RLS).
+function decodeJwtSub(token: string): string | null {
+  try {
+    const part = token.split(".")[1];
+    if (!part) return null;
+    const padded = part.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(part.length / 4) * 4, "=");
+    const payload = JSON.parse(atob(padded));
+    return typeof payload?.sub === "string" ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
 import { Buffer } from "node:buffer";
 import { gunzipSync } from "node:zlib";
 import { Readable } from "node:stream";
