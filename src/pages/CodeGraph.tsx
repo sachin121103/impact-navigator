@@ -528,6 +528,9 @@ const CodeGraph = () => {
                 {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Map repo"}
               </button>
             </div>
+            <p className="mt-2.5 font-mono text-[10px] tracking-wide" style={{ color: T.dim }}>
+              Supports Python · JS / TS · C / C++ · Java
+            </p>
             <button
               onClick={() => setHasLoadedRepo(true)}
               className="mt-4 font-mono text-[11px] uppercase tracking-widest transition-colors"
