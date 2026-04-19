@@ -1110,6 +1110,79 @@ function buildGraph(files: { path: string; content: string }[]): {
         pendingCalls.push([`${f.path}::${caller}`, callee]);
       }
     }
+    else if (ext === ".go") {
+      const p = parseGo(f.content);
+      for (const qn of p.functions) {
+        const id = `${f.path}::${qn}`;
+        if (!nodes.some((n) => n.id === id)) {
+          nodes.push({ id, type: "function", file: f.path, name: qn });
+        }
+        fnIndex[qn] = id;
+        const bare = qn.split(".").pop()!;
+        if (!(bare in fnIndex)) fnIndex[bare] = id;
+      }
+      for (const spec of new Set(p.imports)) {
+        const target = resolveGoImport(spec, goPkgIdx);
+        if (target && target !== f.path && !edges.some(
+          (e) => e.source === f.path && e.target === target && e.type === "imports",
+        )) {
+          edges.push({ source: f.path, target, type: "imports" });
+        }
+      }
+      for (const [caller, callee] of p.calls) {
+        pendingCalls.push([`${f.path}::${caller}`, callee]);
+      }
+    }
+    else if (ext === ".rs") {
+      const p = parseRust(f.content);
+      for (const qn of p.functions) {
+        const id = `${f.path}::${qn}`;
+        if (!nodes.some((n) => n.id === id)) {
+          nodes.push({ id, type: "function", file: f.path, name: qn });
+        }
+        fnIndex[qn] = id;
+      }
+      for (const spec of new Set(p.imports)) {
+        const target = resolveRustImport(spec, rustModIdx);
+        if (target && target !== f.path && !edges.some(
+          (e) => e.source === f.path && e.target === target && e.type === "imports",
+        )) {
+          edges.push({ source: f.path, target, type: "imports" });
+        }
+      }
+      for (const [caller, callee] of p.calls) {
+        pendingCalls.push([`${f.path}::${caller}`, callee]);
+      }
+    }
+    else if (ext === ".cs") {
+      const p = parseCSharp(f.content);
+      for (const cls of p.classes) {
+        const id = `${f.path}::${cls}`;
+        if (!nodes.some((n) => n.id === id)) {
+          nodes.push({ id, type: "class", file: f.path, name: cls });
+        }
+      }
+      for (const qn of p.methods) {
+        const id = `${f.path}::${qn}`;
+        if (!nodes.some((n) => n.id === id)) {
+          nodes.push({ id, type: "function", file: f.path, name: qn });
+        }
+        fnIndex[qn] = id;
+        const bare = qn.split(".").pop()!;
+        if (!(bare in fnIndex)) fnIndex[bare] = id;
+      }
+      for (const spec of new Set(p.imports)) {
+        const target = resolveCSharpImport(spec, csharpClassIdx);
+        if (target && target !== f.path && !edges.some(
+          (e) => e.source === f.path && e.target === target && e.type === "imports",
+        )) {
+          edges.push({ source: f.path, target, type: "imports" });
+        }
+      }
+      for (const [caller, callee] of p.calls) {
+        pendingCalls.push([`${f.path}::${caller}`, callee]);
+      }
+    }
     // .h / .hpp: file node only
   }
 
