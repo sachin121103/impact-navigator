@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Beaker,
   Copy,
@@ -27,7 +27,8 @@ import {
   exportPlanJson,
   exportPlanShell,
   findCoveringTests,
-  findDeadTests,
+  findDeadCode,
+  type DeadEntry,
   formatTime,
   indexNodes,
   isTestNode,
@@ -91,7 +92,7 @@ const TestPath = () => {
     () => new Set(coverage.untestedNodeIds),
     [coverage],
   );
-  const deadTests = useMemo(() => findDeadTests(data), [data]);
+  const dead = useMemo(() => findDeadCode(data), [data]);
 
   const prPlan = useMemo(() => {
     const files = prFiles
@@ -204,14 +205,19 @@ const TestPath = () => {
               </TabsTrigger>
             </TabsList>
 
-            {/* ── PLAN ── */}
+            {/* ── PLAN ── Pick a symbol you're about to change → see only the tests that exercise it. */}
             <TabsContent value="plan" className="mt-4 space-y-3">
+              {!modifiedId && (
+                <p className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">Smart test selection.</span> Pick the symbol you're about to change. We'll walk the graph backwards from it and list every test that reaches it — so you can run only those instead of the full suite.
+                </p>
+              )}
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="search symbols…"
+                  placeholder="search symbols (function, class, file)…"
                   className="h-8 pl-7 font-mono text-xs"
                 />
               </div>
@@ -249,8 +255,11 @@ const TestPath = () => {
               )}
             </TabsContent>
 
-            {/* ── COVERAGE ── */}
+            {/* ── COVERAGE ── How much of the code has any test reaching it? */}
             <TabsContent value="coverage" className="mt-4 space-y-3">
+              <p className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Test coverage map.</span> The percentage of code symbols that have at least one test reaching them through the dependency graph. Click any untested symbol to see what it would take to test it.
+              </p>
               <div className="grid grid-cols-3 gap-2 text-center">
                 <Stat label="covered" value={`${coverage.coveragePercent}%`} tone="accent" />
                 <Stat label="of nodes" value={coverage.codeNodeCount} />
@@ -258,7 +267,7 @@ const TestPath = () => {
               </div>
               <div className="space-y-1">
                 <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                  Untested islands · top 12
+                  Untested symbols · click to inspect
                 </p>
                 <ul className="max-h-[260px] space-y-1 overflow-auto rounded-md border border-border/60 p-1.5">
                   {coverage.untestedNodeIds.slice(0, 12).map((id) => {
@@ -286,21 +295,31 @@ const TestPath = () => {
               </div>
             </TabsContent>
 
-            {/* ── DEAD TESTS ── */}
+            {/* ── DEAD CODE ── Symbols nothing else uses. */}
             <TabsContent value="dead" className="mt-4 space-y-3">
-              <p className="text-xs text-muted-foreground">
-                Tests with no outgoing edges — they don't actually exercise any code in the graph.
+              <p className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Dead code.</span> Symbols nothing else points to: functions or classes with no callers outside their file, files that nobody imports, and tests that don't exercise anything.
               </p>
-              <ul className="max-h-[300px] space-y-1 overflow-auto rounded-md border border-border/60 p-1.5">
-                {deadTests.map((n) => (
-                  <li key={n.id} className="flex items-center justify-between gap-2 rounded px-2 py-1 text-xs">
-                    <span className="truncate">{n.name}</span>
-                    <span className="truncate font-mono text-[10px] text-muted-foreground">{n.file}</span>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <Stat label="dead" value={dead.length} tone={dead.length ? "destructive" : undefined} />
+                <Stat label="files" value={dead.filter((d) => d.reason === "no importers").length} />
+                <Stat label="symbols" value={dead.filter((d) => d.reason === "no callers").length} />
+              </div>
+              <ul className="max-h-[260px] space-y-1 overflow-auto rounded-md border border-border/60 p-1.5">
+                {dead.map((d) => (
+                  <li key={d.node.id} className="grid grid-cols-[1fr_auto] items-center gap-2 rounded px-2 py-1.5 text-xs">
+                    <div className="min-w-0">
+                      <p className="truncate">{d.node.name}</p>
+                      <p className="truncate font-mono text-[10px] text-muted-foreground">{d.node.file}</p>
+                    </div>
+                    <Badge variant="secondary" className="shrink-0 font-mono text-[9px]">
+                      {d.reason}
+                    </Badge>
                   </li>
                 ))}
-                {deadTests.length === 0 && (
+                {dead.length === 0 && (
                   <li className="px-2 py-3 text-center text-xs text-muted-foreground">
-                    no dead tests detected
+                    nothing dead — clean graph ✨
                   </li>
                 )}
               </ul>
@@ -308,8 +327,8 @@ const TestPath = () => {
 
             {/* ── PR MODE ── */}
             <TabsContent value="pr" className="mt-4 space-y-3">
-              <p className="text-xs text-muted-foreground">
-                Paste changed file paths (one per line) to compute the union test plan.
+              <p className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">PR mode.</span> Paste the list of files changed in a pull request (one per line). TestPath aggregates the union of all tests reaching any of them — perfect for CI hooks that should only run what the PR actually affects.
               </p>
               <Textarea
                 value={prFiles}
