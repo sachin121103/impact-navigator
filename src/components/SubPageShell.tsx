@@ -22,7 +22,7 @@ export const SubPageShell = ({
 }) => {
   const { user, signOut } = useAuth();
   return (
-    <div className="relative min-h-screen w-full overflow-hidden texture-paper">
+    <div className="relative min-h-screen w-full texture-paper">
       {/* Floating top bar */}
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between px-5 py-4">
         <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-border/60 bg-card/70 px-4 py-2 shadow-paper backdrop-blur">
