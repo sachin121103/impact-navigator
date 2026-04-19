@@ -529,7 +529,7 @@ const CodeGraph = () => {
               </button>
             </div>
             <p className="mt-2.5 font-mono text-[10px] tracking-wide" style={{ color: T.dim }}>
-              Supports Python · JS / TS · C / C++ · Java
+              Supports Python · JS / TS · C / C++ · Java · Go · Rust · C#
             </p>
             <button
               onClick={() => setHasLoadedRepo(true)}
