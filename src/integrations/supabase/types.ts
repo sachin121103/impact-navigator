@@ -284,6 +284,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      refresh_fan_counts: { Args: { p_repo_id: string }; Returns: undefined }
     }
     Enums: {
       app_role: "admin" | "user"
