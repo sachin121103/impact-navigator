@@ -483,10 +483,17 @@ export const CodeGraphCanvas = ({
 
     const updateEdgePaths = () => {
       const skipContains = nodes.length > 1000;
-      for (const [type, arr] of linksByType) {
-        if (type === "contains" && skipContains) continue;
+      // Iterate ALL known edge types so paths whose type is no longer present
+      // in the current data get cleared instead of keeping stale geometry.
+      const allTypes: EdgeType[] = ["imports", "calls", "include", "contains"];
+      for (const type of allTypes) {
         const el = edgePathRefs.current.get(type);
         if (!el) continue;
+        const arr = linksByType.get(type);
+        if (!arr || arr.length === 0 || (type === "contains" && skipContains)) {
+          el.setAttribute("d", "");
+          continue;
+        }
         el.setAttribute("d", buildEdgePath(arr));
       }
       // Highlight overlay
