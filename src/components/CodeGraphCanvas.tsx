@@ -666,7 +666,7 @@ export const CodeGraphCanvas = ({
           ))}
         </defs>
 
-        <g ref={gRef}>
+        <g ref={gRef} style={{ willChange: "transform" }}>
           {/* Zone backgrounds */}
           <g pointerEvents="none">
             {zoneDescriptors.map((z) => {
