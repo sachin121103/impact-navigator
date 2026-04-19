@@ -16,7 +16,6 @@ import { SAMPLE_GRAPH, type GraphPayload } from "@/lib/sample-graph";
 import {
   applyAbstraction,
   moduleKey,
-  moduleNodeId,
   type AbstractionLevel,
 } from "@/lib/graph-layers";
 import {
