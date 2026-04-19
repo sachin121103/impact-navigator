@@ -113,7 +113,7 @@ Deno.serve(async (req) => {
       { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
-  const userId = claimsData.claims.sub as string;
+  const userId = userData.user.id;
 
   // Service-role client used only for the final impact_runs insert (which
   // still passes through the RLS WITH CHECK because we set repo_id).

@@ -618,7 +618,7 @@ Deno.serve(async (req) => {
           { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
-      ownerId = claimsData.claims.sub as string;
+      ownerId = userData.user.id;
 
       const body = await req.json().catch(() => ({}));
       if (!body.repoUrl) throw new Error("repoUrl is required");
