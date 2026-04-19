@@ -9,7 +9,7 @@ import Index from "./pages/Index.tsx";
 import Auth from "./pages/Auth.tsx";
 import MyRepos from "./pages/MyRepos.tsx";
 import CodeGraph from "./pages/CodeGraph.tsx";
-import SentinelGraph from "./pages/SentinelGraph.tsx";
+import TestPath from "./pages/TestPath.tsx";
 import ImpactRadar from "./pages/ImpactRadar.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
@@ -42,14 +42,15 @@ const App = () => (
               }
             />
             <Route
-              path="/sentinel-graph"
+              path="/testpath"
               element={
                 <RequireAuth>
-                  <SentinelGraph />
+                  <TestPath />
                 </RequireAuth>
               }
             />
-            <Route path="/code-star" element={<Navigate to="/sentinel-graph" replace />} />
+            <Route path="/sentinel-graph" element={<Navigate to="/testpath" replace />} />
+            <Route path="/code-star" element={<Navigate to="/testpath" replace />} />
             <Route
               path="/impact-radar"
               element={

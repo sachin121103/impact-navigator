@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Compass, GitBranch, Sparkles, Radar, ArrowUpRight, LogOut } from "lucide-react";
+import { Compass, GitBranch, Beaker, Radar, ArrowUpRight, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -19,7 +19,7 @@ const Index = () => {
         </Link>
         <nav className="hidden items-center gap-7 text-sm text-muted-foreground md:flex">
           <Link to="/code-graph" className="hover:text-foreground transition-colors">Code Graph</Link>
-          <Link to="/sentinel-graph" className="hover:text-foreground transition-colors">Sentinel Graph</Link>
+          <Link to="/testpath" className="hover:text-foreground transition-colors">TestPath</Link>
           <Link to="/impact-radar" className="hover:text-foreground transition-colors">Impact Radar</Link>
         </nav>
         {user ? (
@@ -102,12 +102,12 @@ const Index = () => {
               body="Visualise an entire repository as a navigable graph — folders, files, and the threads between them. Zoom from continent to street."
             />
             <ToolCard
-              to="/sentinel-graph"
+              to="/testpath"
               n="02"
-              icon={<Sparkles className="h-5 w-5" />}
-              name="Sentinel Graph"
-              tagline="What will it touch?"
-              body="A live dependency map with dead-code highlighting, ripple impact analysis, and a test orchestrator that runs only the tests your change actually breaks."
+              icon={<Beaker className="h-5 w-5" />}
+              name="TestPath"
+              tagline="Run only what matters."
+              body="Pick a symbol you're about to change. TestPath walks the dependency graph backwards to surface the minimum set of tests that exercise it — ranked by distance, with a runnable plan."
             />
             <ToolCard
               to="/impact-radar"
