@@ -1,59 +1,50 @@
 
 ## Goal
-Push `/code-graph` and `/sentinel-graph` past the previous optimization pass — go from "smooth on 1k nodes" to "smooth on 3k+ nodes" without a full Canvas/WebGL rewrite.
+Make the **initial render** of `/code-graph` (and `/sentinel-graph`) look smooth and intentional instead of the current "explode then settle" jitter. Users can wait an extra 1–2s — they just need it to look composed.
 
-## What's still expensive (after the last pass)
+## Why it's jittery now
+1. Nodes start at **random positions** (d3 default), so the first ~30 ticks look like a violent firework before forces pull things into place.
+2. The simulation begins at `alpha=1` and ticks render straight to the DOM — every chaotic intermediate frame is visible.
+3. `alphaDecay=0.025` means ~150 ticks before settle. Combined with random init, that's ~12 seconds of visible churn.
+4. There's no opacity fade-in — nodes/edges pop in at full strength while still in their wrong positions.
+5. Zone rects update every tick during this chaos, expanding and contracting visibly.
 
-1. **Every tick still touches every node.** The simulation tick loop calls `setAttribute('cx'|'cy', …)` on N circles + N labels + M lines, ~12×/sec. At 2k nodes that's 6k DOM writes/frame triggering style recalc on the whole `<svg>` subtree.
-2. **Edges are individual `<line>` elements.** Each one is a separate layer in the SVG render tree. 3k edges = 3k DOM nodes the browser repaints on any pan/zoom.
-3. **Labels render even when zoomed out.** Tiny text below the legibility threshold still costs a text layout per label per frame.
-4. **Pan/zoom re-applies a transform on the root `<g>`** — fine — but anything inside that uses non-transform animations (rings, ripples) forces full repaints inside the transformed layer.
-5. **No viewport culling.** Nodes/edges off-screen are still in the DOM and still get tick updates.
-6. **Sentinel ripples** keep `AnimatePresence` + 3 infinite `motion.circle` per selection, which Framer re-evaluates each frame.
+## Approach (no UI redesign, just choreography)
 
-## Approach
+### A. Pre-warm the simulation off-screen
+Before the first paint, run **N silent ticks** in a `for` loop (no DOM writes) so positions are already near-settled by the time the user sees anything. d3 supports this — `sim.tick(n)` advances without firing the `tick` event handler.
+- For ≤500 nodes: pre-run 120 ticks.
+- For 500–2000: pre-run 80 ticks.
+- For >2000: pre-run 50 ticks (cap, otherwise startup feels slow).
+- Wrap in `requestIdleCallback` / `setTimeout(0)` so the loading state can render first.
 
-### A. Single-path edges (biggest win)
-Replace the per-edge `<line>` elements with **one `<path>` per edge-style** (one for `imports`, one for `calls`, one for `contains`, etc.). Each tick, we rebuild a single `d="M x1 y1 L x2 y2 …"` string and assign it once. Going from 3000 DOM nodes → 3 DOM nodes for edges typically cuts paint by 5–10×.
-- File: `src/components/CodeGraphCanvas.tsx`, `src/components/SentinelGraphCanvas.tsx`
-- Highlighted/blast edges go in a separate overlay `<path>` so we don't touch the bulk path on hover.
+### B. Deterministic seeded initial layout
+Replace d3's random init with a **seeded radial placement by zone**: each node starts inside a small jittered circle around its zone anchor (already computed in `zoneAnchors`). This gives the pre-warm a sane starting point and means even the first visible frame already has the cluster structure.
 
-### B. Transform-based node positioning
-Switch each node group from `setAttribute('cx', …)` on `<circle>` + `setAttribute('x', …)` on `<text>` to a single `setAttribute('transform', 'translate(x,y)')` on the wrapping `<g>`. One write per node instead of 3–4, and `transform` updates skip layout — only compositing.
+### C. Fade-in choreography
+- Hold the `<svg>` content at `opacity: 0` until pre-warm completes.
+- Then crossfade to `opacity: 1` over 600ms via CSS transition on the root `<g>`.
+- During the fade-in, run the simulation at a **lower alpha** (`0.3`) and slower decay so the small remaining motion looks like a gentle "breathe into place" instead of a snap.
 
-### C. Viewport culling
-Track current pan/zoom (already in state). Each tick, for each node compute "is on screen with margin?". If off-screen:
-- Hide the node `<g>` via `display: none` (not just opacity — `display:none` skips paint entirely).
-- Skip its segment in the edges path.
-Re-evaluate culling only every ~4 ticks (cheap diff) to keep the per-frame cost low.
+### D. Loading scrim during pre-warm
+Show a lightweight loading state ("Composing graph…") over the canvas area while pre-warm runs. Reuses existing glass panel style. Disappears in the same fade as the graph appears.
 
-### D. Zoom-tiered LOD
-Three tiers driven by `zoom`:
-- **z < 0.4** (zoomed out): no labels, no rings, no shadows; nodes drawn as flat circles only.
-- **0.4 ≤ z < 0.9**: labels only on hovered/selected/search-matched/top-N important nodes (already partly there — tighten the cap from current threshold to a hard top-50).
-- **z ≥ 0.9**: full detail.
+### E. Suppress zone rects until settled
+Don't render zone rects during the initial fade-in — they currently morph wildly. Render them only after the first `setLayoutVersion` bump (already triggered when `alpha < 0.05`).
 
-### E. Stop animating on idle
-After simulation `alpha < 0.02` for >500ms, stop the rAF tick entirely. Restart it on: hover, drag, zoom, data change, selection. Currently the loop keeps running at low alpha doing tiny no-op writes.
-
-### F. Sentinel-specific
-- Replace per-edge `<line>` with grouped `<path>` (3 paths: imports / calls / covers).
-- Cap ripple rings to **1** instead of 3 (visually nearly identical, 3× cheaper).
-- Disable the dead-glow filter entirely above 150 nodes (already partially done) and use a static red stroke instead.
-
-### G. Will-change hint, sparingly
-On the pan/zoom root `<g>`, add `style={{ willChange: 'transform' }}`. Do **not** apply it to nodes — that would balloon GPU memory.
+### F. Same treatment for SentinelGraphCanvas
+Apply A, B, C to `SentinelGraphCanvas.tsx` — the radial placement and pre-warm tick loop are the same pattern.
 
 ## Files
-- **edit** `src/components/CodeGraphCanvas.tsx` — grouped-path edges, transform-based node updates, viewport culling, LOD tiers, idle-stop tick loop.
-- **edit** `src/components/SentinelGraphCanvas.tsx` — grouped-path edges, single ripple ring, transform-based nodes.
-- No new deps. No worker changes. No metric changes.
+- **edit** `src/components/CodeGraphCanvas.tsx` — seeded radial init, pre-warm tick loop, opacity fade-in, loading scrim, gate zone rects on settle.
+- **edit** `src/components/SentinelGraphCanvas.tsx` — same pattern.
 
 ## Out of scope
-- Canvas/WebGL rendering (separate proposal if SVG ceiling is still hit at 5k+).
-- Server-side layout precomputation.
+- Changing the simulation forces or visual style.
+- Animated entrance per-node (would re-introduce per-node React work).
+- WebGL.
 
 ## Verification
-1. `/code-graph` with `facebook/react`-scale repo: pan/zoom stays at 60fps once cool; switching analysis modes no longer repaints the whole edge layer.
-2. `/sentinel-graph` with sample data: ripple still visible, no jank on selection.
-3. DOM node count for `<svg>` subtree drops by ~edge-count (verifiable via DevTools Elements panel).
+1. Reload `/code-graph` with a large repo — see "Composing graph…" briefly, then the graph **fades in already-arranged**, with only gentle settling motion.
+2. No more "explosion then collapse" first impression.
+3. `/sentinel-graph` opens with nodes in their final clusters from frame 1.
