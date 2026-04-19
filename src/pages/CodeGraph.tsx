@@ -182,10 +182,14 @@ const CodeGraph = () => {
     setLoading(true);
     setError(null);
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) throw new Error("Please sign in again.");
+
       const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/graph-meta?repo=${encodeURIComponent(repoInput)}`;
       const r = await fetch(url, {
         headers: {
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+          Authorization: `Bearer ${accessToken}`,
           apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
         },
       });
