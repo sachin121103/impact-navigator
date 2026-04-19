@@ -5,3 +5,9 @@ verify_jwt = false
 
 [functions.run-radar]
 verify_jwt = false
+
+[functions.graph-meta]
+verify_jwt = false
+
+[functions.impact-analyze]
+verify_jwt = false
