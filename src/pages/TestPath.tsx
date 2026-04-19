@@ -96,6 +96,15 @@ const TestPath = () => {
     () => new Set(coverage.untestedNodeIds),
     [coverage],
   );
+  const coveredSet = useMemo(() => {
+    // Any non-test code node not flagged as untested is reached by ≥1 test.
+    const s = new Set<string>();
+    for (const n of data.nodes) {
+      if (isTestNode(n)) continue;
+      if (!untestedSet.has(n.id)) s.add(n.id);
+    }
+    return s;
+  }, [data, untestedSet]);
   const dead = useMemo(() => findDeadCode(data), [data]);
   const deadFunctions = useMemo(
     () => dead.filter((d) => d.node.type === "function" || d.node.type === "class"),
@@ -160,6 +169,8 @@ const TestPath = () => {
               selectedId={modifiedId}
               coveringTestIds={coveringIds}
               untestedIds={untestedSet}
+              coveredIds={coveredSet}
+              mode={tab === "coverage" ? "coverage" : "default"}
               onSelect={(id) => setModifiedId(id)}
             />
           </div>
