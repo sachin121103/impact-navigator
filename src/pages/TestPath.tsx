@@ -107,7 +107,19 @@ const TestPath = () => {
   }, [data, untestedSet]);
   const dead = useMemo(() => findDeadCode(data), [data]);
   const deadFunctions = useMemo(
-    () => dead.filter((d) => d.node.type === "function" || d.node.type === "class"),
+    () => dead.filter(
+      (d) =>
+        (d.node.type === "function" || d.node.type === "class") &&
+        d.reason !== "likely-dispatch",
+    ),
+    [dead],
+  );
+  const dispatchFunctions = useMemo(
+    () => dead.filter(
+      (d) =>
+        (d.node.type === "function" || d.node.type === "class") &&
+        d.reason === "likely-dispatch",
+    ),
     [dead],
   );
 
