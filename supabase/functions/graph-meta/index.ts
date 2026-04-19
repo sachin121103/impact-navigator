@@ -66,6 +66,20 @@ const SKIP_DIRS = new Set([
   "dist", "build", ".next", ".nuxt", ".turbo", ".cache",
   "out", "coverage", "__tests__", "__mocks__",
 ]);
+// Path-prefix skips for generated/boilerplate Lovable/shadcn folders that
+// drown out real app structure with disconnected nodes.
+const SKIP_PATH_PREFIXES = [
+  "src/components/ui/",
+  "src/integrations/",
+  "supabase/",
+];
+// Specific files inside otherwise-kept folders that are pure wrappers/noise.
+const SKIP_FILES = new Set([
+  "src/hooks/use-toast.ts",
+  "src/hooks/use-toast.tsx",
+  "src/hooks/use-mobile.tsx",
+  "src/hooks/use-mobile.ts",
+]);
 const KEEP_EXT = new Set([
   ".py", ".ipynb",
   ".c", ".h", ".cpp", ".hpp", ".cc",
