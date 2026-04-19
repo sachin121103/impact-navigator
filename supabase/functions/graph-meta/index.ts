@@ -1063,6 +1063,23 @@ function resolveJsImport(
   spec: string,
   allFiles: Set<string>,
 ): string | null {
+  const exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+
+  const tryBase = (base: string): string | null => {
+    if (allFiles.has(base)) return base;
+    for (const ext of exts) if (allFiles.has(base + ext)) return base + ext;
+    for (const ext of exts) {
+      const c = `${base}/index${ext}`;
+      if (allFiles.has(c)) return c;
+    }
+    return null;
+  };
+
+  // Path aliases: "@/foo/bar" → src/foo/bar, fall back to project-root.
+  if (spec.startsWith("@/") || spec.startsWith("~/")) {
+    const rest = spec.slice(2);
+    return tryBase(`src/${rest}`) ?? tryBase(rest);
+  }
   if (!spec.startsWith(".")) return null;
   const dir = importerPath.split("/").slice(0, -1).join("/");
   const segs = (dir ? dir.split("/") : []).concat(spec.split("/"));
@@ -1072,17 +1089,7 @@ function resolveJsImport(
     if (s === "..") { stack.pop(); continue; }
     stack.push(s);
   }
-  const base = stack.join("/");
-  const exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
-  if (allFiles.has(base)) return base;
-  for (const ext of exts) {
-    if (allFiles.has(base + ext)) return base + ext;
-  }
-  for (const ext of exts) {
-    const candidate = `${base}/index${ext}`;
-    if (allFiles.has(candidate)) return candidate;
-  }
-  return null;
+  return tryBase(stack.join("/"));
 }
 
 // ---------- Build graph ----------------------------------------------------
