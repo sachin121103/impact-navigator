@@ -98,7 +98,7 @@ function tstr(buf: Uint8Array, off: number, len: number): string {
 async function readTarGz(
   url: string,
   maxFiles = 600,
-): Promise<{ path: string; content: string }[]> {
+): Promise<{ files: { path: string; content: string }[]; skippedExt: Record<string, number>; totalCandidate: number }> {
   const res = await fetch(url, { redirect: "follow" });
   if (!res.ok || !res.body) {
     throw new Error(`Tarball fetch failed: ${res.status}`);
