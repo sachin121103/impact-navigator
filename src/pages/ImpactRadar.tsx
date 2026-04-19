@@ -415,6 +415,32 @@ const ImpactRadar = () => {
             </span>
           </div>
 
+          {(() => {
+            const { level, reasons } = computeCriticality(
+              radarState.data.affected,
+              (radarState.data as any).resolvedSymbol?.fan_in ?? 0,
+            );
+            const meta = CRIT_META[level];
+            return (
+              <div className={`rounded-md border ${meta.border} ${meta.bg} px-4 py-3 shadow-paper`}>
+                <div className="flex items-center gap-2">
+                  <span className={`font-mono text-[10px] uppercase tracking-widest ${meta.color}`}>
+                    criticality
+                  </span>
+                  <span className={`font-mono text-sm font-semibold tracking-wide ${meta.color}`}>
+                    {meta.label}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-foreground">{meta.blurb}.</p>
+                {reasons.length > 0 && (
+                  <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                    {reasons.join(" · ")}
+                  </p>
+                )}
+              </div>
+            );
+          })()}
+
           <div className="rounded-md border border-border bg-card shadow-paper overflow-hidden">
             <div className="px-4 py-2 border-b border-border text-xs font-mono text-muted-foreground">
               {radarState.data.summary.total} affected symbols
@@ -422,12 +448,6 @@ const ImpactRadar = () => {
             <div className="max-h-52 overflow-y-auto divide-y divide-border">
               {affected.slice(0, 15).map((sym) => (
                 <div key={sym.id} className="flex items-center gap-3 px-4 py-2 text-xs">
-                  <span className={`shrink-0 ${RISK_CLASS[sym.risk]}`}>●</span>
-                  <span
-                    className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${RISK_CLASS[sym.risk]} border-current/30`}
-                  >
-                    {sym.risk === "medium" ? "MED" : sym.risk.toUpperCase()}
-                  </span>
                   <span className="font-mono text-foreground truncate">{sym.name}</span>
                   <span className="text-muted-foreground truncate flex-1 min-w-0">
                     {sym.file_path.split("/").slice(-2).join("/")}
