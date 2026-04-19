@@ -452,7 +452,292 @@ function resolveJavaImport(spec: string, classIdx: Map<string, string>): string 
   return null;
 }
 
-// ---------- JS / TS parser -------------------------------------------------
+// ---------- Go parser ------------------------------------------------------
+// Captures top-level funcs (including methods on receivers — `func (r *T) Name()`),
+// imports from `import "x"` and `import ( "x" "y" )` blocks, and intra-file calls.
+const GO_RESERVED = new Set([
+  "if", "else", "for", "switch", "case", "default", "select", "return",
+  "break", "continue", "go", "defer", "func", "var", "const", "type",
+  "struct", "interface", "map", "chan", "package", "import", "range",
+  "make", "new", "len", "cap", "append", "copy", "delete", "panic",
+  "recover", "print", "println", "true", "false", "nil", "iota",
+  "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16",
+  "uint32", "uint64", "float32", "float64", "string", "bool", "byte", "rune",
+  "error", "fmt", "Errorf", "Sprintf", "Printf", "Println",
+]);
+const GO_FUNC_RE = /\bfunc\s*(?:\(\s*[A-Za-z_]\w*\s+\*?([A-Z][\w]*)\s*\))?\s*([A-Za-z_]\w*)\s*\([^)]*\)[^{]*\{/g;
+const GO_IMPORT_BLOCK_RE = /\bimport\s*\(\s*([\s\S]*?)\)/g;
+const GO_IMPORT_SINGLE_RE = /\bimport\s+(?:[A-Za-z_]\w*\s+)?["`]([^"`]+)["`]/g;
+const GO_QUOTED_IMPORT_RE = /(?:[A-Za-z_]\w*\s+)?["`]([^"`]+)["`]/g;
+const GO_CALL_RE = /\b([A-Za-z_]\w*)\s*\(/g;
+
+interface GoParsed {
+  functions: string[];
+  imports: string[];
+  calls: [string, string][];
+}
+
+function parseGo(rawSrc: string): GoParsed {
+  const src = stripJsNoise(rawSrc); // Go uses // and /* */ — same noise stripper works
+  const out: GoParsed = { functions: [], imports: [], calls: [] };
+
+  // Imports: block form
+  let m: RegExpExecArray | null;
+  const reBlock = new RegExp(GO_IMPORT_BLOCK_RE.source, "g");
+  while ((m = reBlock.exec(src)) !== null) {
+    const inner = m[1];
+    const reQ = new RegExp(GO_QUOTED_IMPORT_RE.source, "g");
+    let q: RegExpExecArray | null;
+    while ((q = reQ.exec(inner)) !== null) out.imports.push(q[1]);
+  }
+  // Imports: single form
+  const reSingle = new RegExp(GO_IMPORT_SINGLE_RE.source, "g");
+  while ((m = reSingle.exec(src)) !== null) out.imports.push(m[1]);
+
+  type Decl = { qname: string; bodyStart: number; bodyEnd: number };
+  const decls: Decl[] = [];
+  const reFn = new RegExp(GO_FUNC_RE.source, "g");
+  while ((m = reFn.exec(src)) !== null) {
+    const recv = m[1]; // optional receiver type
+    const fname = m[2];
+    const qname = recv ? `${recv}.${fname}` : fname;
+    out.functions.push(qname);
+    const open = m.index + m[0].length - 1;
+    const close = matchBrace(src, open);
+    decls.push({ qname, bodyStart: open, bodyEnd: close });
+  }
+
+  decls.sort((a, b) => a.bodyStart - b.bodyStart);
+  for (const d of decls) {
+    const re = new RegExp(GO_CALL_RE.source, "g");
+    re.lastIndex = d.bodyStart + 1;
+    let cm: RegExpExecArray | null;
+    while ((cm = re.exec(src)) !== null) {
+      if (cm.index >= d.bodyEnd) break;
+      const callee = cm[1];
+      if (GO_RESERVED.has(callee)) continue;
+      let innermost = d;
+      for (const e of decls) {
+        if (e === d) continue;
+        if (e.bodyStart > d.bodyStart && e.bodyEnd <= d.bodyEnd &&
+            e.bodyStart <= cm.index && cm.index < e.bodyEnd) {
+          if (e.bodyStart > innermost.bodyStart) innermost = e;
+        }
+      }
+      if (innermost === d) out.calls.push([d.qname, callee]);
+    }
+  }
+  return out;
+}
+
+// Resolve Go imports against in-repo modules: match by trailing path segment
+// against directories that contain .go files.
+function buildGoPackageIndex(files: { path: string; content: string }[]): Map<string, string> {
+  const idx = new Map<string, string>();
+  for (const f of files) {
+    if (!f.path.toLowerCase().endsWith(".go")) continue;
+    const dir = f.path.split("/").slice(0, -1).join("/");
+    if (dir && !idx.has(dir)) idx.set(dir, f.path);
+    const last = dir.split("/").pop();
+    if (last && !idx.has(last)) idx.set(last, f.path);
+  }
+  return idx;
+}
+
+function resolveGoImport(spec: string, pkgIdx: Map<string, string>): string | null {
+  // import paths like "github.com/owner/repo/internal/foo" — match suffix segments
+  const parts = spec.split("/");
+  for (let i = 0; i < parts.length; i++) {
+    const tail = parts.slice(i).join("/");
+    if (pkgIdx.has(tail)) return pkgIdx.get(tail)!;
+  }
+  const last = parts[parts.length - 1];
+  if (last && pkgIdx.has(last)) return pkgIdx.get(last)!;
+  return null;
+}
+
+// ---------- Rust parser ----------------------------------------------------
+// Captures `fn name(...)` (free + impl methods), `use a::b::c;` and `mod x;`.
+const RUST_RESERVED = new Set([
+  "if", "else", "for", "while", "loop", "match", "return", "break",
+  "continue", "fn", "let", "mut", "const", "static", "struct", "enum",
+  "trait", "impl", "mod", "use", "pub", "as", "in", "ref", "where",
+  "move", "async", "await", "dyn", "self", "Self", "super", "crate",
+  "true", "false", "Some", "None", "Ok", "Err", "Box", "Vec", "String",
+  "println", "print", "format", "vec", "panic", "assert", "assert_eq",
+  "debug_assert", "matches", "todo", "unimplemented", "unreachable",
+]);
+const RUST_FN_RE = /\b(?:pub\s+(?:\([^)]*\)\s+)?)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+(?:"[^"]*"\s+)?)?fn\s+([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\([^)]*\)[^{;]*\{/g;
+const RUST_USE_RE = /\buse\s+([A-Za-z_][\w:]*)(?:\s*::\s*\{[^}]*\})?\s*;/g;
+const RUST_MOD_RE = /\bmod\s+([A-Za-z_]\w*)\s*;/g;
+const RUST_CALL_RE = /\b([A-Za-z_]\w*)\s*(?:::<[^>]+>)?\s*\(/g;
+
+interface RustParsed {
+  functions: string[];
+  imports: string[];
+  calls: [string, string][];
+}
+
+function parseRust(rawSrc: string): RustParsed {
+  const src = stripJsNoise(rawSrc);
+  const out: RustParsed = { functions: [], imports: [], calls: [] };
+
+  let m: RegExpExecArray | null;
+  const reUse = new RegExp(RUST_USE_RE.source, "g");
+  while ((m = reUse.exec(src)) !== null) out.imports.push(m[1]);
+  const reMod = new RegExp(RUST_MOD_RE.source, "g");
+  while ((m = reMod.exec(src)) !== null) out.imports.push(m[1]);
+
+  type Decl = { qname: string; bodyStart: number; bodyEnd: number };
+  const decls: Decl[] = [];
+  const reFn = new RegExp(RUST_FN_RE.source, "g");
+  while ((m = reFn.exec(src)) !== null) {
+    const fname = m[1];
+    out.functions.push(fname);
+    const open = m.index + m[0].length - 1;
+    const close = matchBrace(src, open);
+    decls.push({ qname: fname, bodyStart: open, bodyEnd: close });
+  }
+
+  decls.sort((a, b) => a.bodyStart - b.bodyStart);
+  for (const d of decls) {
+    const re = new RegExp(RUST_CALL_RE.source, "g");
+    re.lastIndex = d.bodyStart + 1;
+    let cm: RegExpExecArray | null;
+    while ((cm = re.exec(src)) !== null) {
+      if (cm.index >= d.bodyEnd) break;
+      const callee = cm[1];
+      if (RUST_RESERVED.has(callee)) continue;
+      let innermost = d;
+      for (const e of decls) {
+        if (e === d) continue;
+        if (e.bodyStart > d.bodyStart && e.bodyEnd <= d.bodyEnd &&
+            e.bodyStart <= cm.index && cm.index < e.bodyEnd) {
+          if (e.bodyStart > innermost.bodyStart) innermost = e;
+        }
+      }
+      if (innermost === d) out.calls.push([d.qname, callee]);
+    }
+  }
+  return out;
+}
+
+// Resolve Rust `use` / `mod` against repo .rs files by trailing module name.
+function buildRustModuleIndex(files: { path: string; content: string }[]): Map<string, string> {
+  const idx = new Map<string, string>();
+  for (const f of files) {
+    if (!f.path.toLowerCase().endsWith(".rs")) continue;
+    const base = f.path.split("/").pop()!.replace(/\.rs$/i, "");
+    if (!idx.has(base)) idx.set(base, f.path);
+  }
+  return idx;
+}
+function resolveRustImport(spec: string, modIdx: Map<string, string>): string | null {
+  const parts = spec.split("::");
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const seg = parts[i];
+    if (seg && modIdx.has(seg)) return modIdx.get(seg)!;
+  }
+  return null;
+}
+
+// ---------- C# parser ------------------------------------------------------
+// Reuses the Java parser's structure — C# has near-identical class/method/using syntax.
+const CSHARP_RESERVED = new Set([
+  ...JAVA_RESERVED,
+  "using", "namespace", "var", "internal", "sealed", "virtual", "override",
+  "out", "ref", "params", "readonly", "unsafe", "fixed", "checked", "unchecked",
+  "delegate", "event", "operator", "explicit", "implicit", "yield", "async",
+  "await", "dynamic", "object", "decimal", "sbyte", "ushort", "uint", "ulong",
+  "Console", "WriteLine", "Write", "string", "Task", "List", "Dictionary",
+  "IEnumerable", "IList", "Action", "Func", "get", "set",
+]);
+const CSHARP_USING_RE = /^\s*using\s+(?:static\s+)?([\w.]+)\s*;/gm;
+const CSHARP_NAMESPACE_RE = /\bnamespace\s+([\w.]+)/g;
+const CSHARP_CLASS_RE = /\b(?:public\s+|private\s+|protected\s+|internal\s+|static\s+|sealed\s+|abstract\s+|partial\s+)*(?:class|interface|struct|record|enum)\s+([A-Z][\w]*)[^{;]*\{/g;
+const CSHARP_METHOD_RE = /(?:^|[\n;{}])\s*(?:(?:public|private|protected|internal|static|virtual|override|abstract|sealed|async|extern|unsafe|new|partial)\s+)*(?:<[^>]+>\s+)?[A-Za-z_][\w<>,.\s\[\]?]*\s+([A-Za-z_]\w*)\s*\([^)]*\)\s*(?:where\s+[\w\s:,()<>]+)?\{/g;
+const CSHARP_CALL_RE = /\b([A-Za-z_]\w*)\s*(?:<[^>]+>)?\s*\(/g;
+
+interface CSharpParsed {
+  classes: string[];
+  methods: string[];
+  imports: string[];
+  calls: [string, string][];
+}
+
+function parseCSharp(rawSrc: string): CSharpParsed {
+  const src = stripJsNoise(rawSrc);
+  const out: CSharpParsed = { classes: [], methods: [], imports: [], calls: [] };
+
+  let m: RegExpExecArray | null;
+  const reUsing = new RegExp(CSHARP_USING_RE.source, "gm");
+  while ((m = reUsing.exec(src)) !== null) out.imports.push(m[1]);
+
+  type Decl = { qname: string; bodyStart: number; bodyEnd: number };
+  const decls: Decl[] = [];
+  const reCls = new RegExp(CSHARP_CLASS_RE.source, "g");
+  while ((m = reCls.exec(src)) !== null) {
+    const clsName = m[1];
+    out.classes.push(clsName);
+    const open = m.index + m[0].length - 1;
+    const close = matchBrace(src, open);
+    const body = src.slice(open + 1, close);
+
+    const reMethod = new RegExp(CSHARP_METHOD_RE.source, "g");
+    let mm: RegExpExecArray | null;
+    while ((mm = reMethod.exec(body)) !== null) {
+      const mname = mm[1];
+      if (CSHARP_RESERVED.has(mname)) continue;
+      if (mname === clsName) continue;
+      const localOpen = mm.index + mm[0].length - 1;
+      const absOpen = open + 1 + localOpen;
+      const absClose = matchBrace(src, absOpen);
+      decls.push({ qname: `${clsName}.${mname}`, bodyStart: absOpen, bodyEnd: absClose });
+      out.methods.push(`${clsName}.${mname}`);
+    }
+  }
+
+  decls.sort((a, b) => a.bodyStart - b.bodyStart);
+  for (const d of decls) {
+    const re = new RegExp(CSHARP_CALL_RE.source, "g");
+    re.lastIndex = d.bodyStart + 1;
+    let cm: RegExpExecArray | null;
+    while ((cm = re.exec(src)) !== null) {
+      if (cm.index >= d.bodyEnd) break;
+      const callee = cm[1];
+      if (CSHARP_RESERVED.has(callee)) continue;
+      let innermost = d;
+      for (const e of decls) {
+        if (e === d) continue;
+        if (e.bodyStart > d.bodyStart && e.bodyEnd <= d.bodyEnd &&
+            e.bodyStart <= cm.index && cm.index < e.bodyEnd) {
+          if (e.bodyStart > innermost.bodyStart) innermost = e;
+        }
+      }
+      if (innermost === d) out.calls.push([d.qname, callee]);
+    }
+  }
+  return out;
+}
+
+function buildCSharpClassIndex(files: { path: string; content: string }[]): Map<string, string> {
+  const idx = new Map<string, string>();
+  for (const f of files) {
+    if (!f.path.toLowerCase().endsWith(".cs")) continue;
+    const base = f.path.split("/").pop()!.replace(/\.cs$/i, "");
+    if (!idx.has(base)) idx.set(base, f.path);
+  }
+  return idx;
+}
+function resolveCSharpImport(spec: string, classIdx: Map<string, string>): string | null {
+  // Same heuristic as Java — walk segments right→left for capitalised matches.
+  const parts = spec.split(".");
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const seg = parts[i];
+    if (seg && /^[A-Z]/.test(seg) && classIdx.has(seg)) return classIdx.get(seg)!;
+  }
+  return null;
+}
 const JS_RESERVED = new Set([
   "if", "else", "for", "while", "do", "switch", "case", "default",
   "return", "break", "continue", "throw", "try", "catch", "finally",
