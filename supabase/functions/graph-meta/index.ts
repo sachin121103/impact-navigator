@@ -788,8 +788,20 @@ const JS_RESERVED = new Set([
   "from", "as", "true", "false", "null", "undefined", "this", "super",
   "console", "require", "Promise", "Array", "Object", "String", "Number",
   "Boolean", "Math", "JSON", "Date", "Error", "Set", "Map", "RegExp",
+  "WeakMap", "WeakSet", "Symbol",
   "parseInt", "parseFloat", "isNaN", "isFinite", "setTimeout", "setInterval",
-  "clearTimeout", "clearInterval", "fetch", "Symbol",
+  "clearTimeout", "clearInterval", "fetch",
+  // React hooks & primitives
+  "useState", "useEffect", "useMemo", "useCallback", "useRef", "useContext",
+  "useReducer", "useLayoutEffect", "useImperativeHandle", "useId",
+  "useTransition", "useDeferredValue", "useSyncExternalStore",
+  "forwardRef", "memo", "lazy", "Suspense", "Fragment", "createContext",
+  "createElement", "cloneElement", "isValidElement",
+  // Common UI / util helpers
+  "cn", "clsx", "twMerge", "cva", "tw", "z",
+  // Common router/data hooks
+  "useNavigate", "useLocation", "useParams", "useSearchParams",
+  "useToast", "useQuery", "useMutation", "useQueryClient",
 ]);
 
 function stripJsNoise(src: string): string {
