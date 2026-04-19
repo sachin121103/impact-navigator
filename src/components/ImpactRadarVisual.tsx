@@ -86,18 +86,21 @@ export const ImpactRadarVisual = ({
         <line x1={20} y1={cy} x2={300} y2={cy} stroke="hsl(var(--foreground))" strokeOpacity="0.05" />
 
         {/* continuous sweep */}
-        <g
-          style={{
-            transformOrigin: `${cx}px ${cy}px`,
-            animation: "radar-sweep 4s linear infinite",
-          }}
-        >
+        <g>
           <defs>
             <linearGradient id="impact-sweep" x1="0" y1="0" x2="1" y2="0">
               <stop offset="0%" stopColor="hsl(var(--accent))" stopOpacity="0" />
               <stop offset="100%" stopColor="hsl(var(--accent))" stopOpacity="0.4" />
             </linearGradient>
           </defs>
+          <animateTransform
+            attributeName="transform"
+            type="rotate"
+            from={`0 ${cx} ${cy}`}
+            to={`360 ${cx} ${cy}`}
+            dur="4s"
+            repeatCount="indefinite"
+          />
           <path d={`M ${cx} ${cy} L ${cx + 130} ${cy} A 130 130 0 0 0 ${cx + 65} ${cy - 113} Z`} fill="url(#impact-sweep)" />
         </g>
 

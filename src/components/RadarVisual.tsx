@@ -85,13 +85,21 @@ export const RadarVisual = ({ results }: Props) => {
         <line x1="20" y1="160" x2="300" y2="160" stroke="hsl(var(--foreground))" strokeOpacity="0.06" />
 
         {/* sweeping arc */}
-        <g style={{ transformOrigin: "160px 160px", animation: "radar-sweep 6s linear infinite" }}>
+        <g>
           <defs>
             <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
               <stop offset="0%" stopColor="hsl(var(--accent))" stopOpacity="0" />
               <stop offset="100%" stopColor="hsl(var(--accent))" stopOpacity="0.55" />
             </linearGradient>
           </defs>
+          <animateTransform
+            attributeName="transform"
+            type="rotate"
+            from="0 160 160"
+            to="360 160 160"
+            dur="4s"
+            repeatCount="indefinite"
+          />
           <path d="M 160 160 L 290 160 A 130 130 0 0 0 215 50 Z" fill="url(#sweep)" />
         </g>
 
