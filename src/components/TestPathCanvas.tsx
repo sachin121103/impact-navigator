@@ -88,16 +88,18 @@ export const TestPathCanvas = ({
   selectedId,
   coveringTestIds,
   untestedIds,
+  coveredIds,
+  mode = "default",
   onSelect,
 }: Props) => {
   const positions = useMemo(() => layout(data), [data]);
   const svgRef = useRef<SVGSVGElement>(null);
 
-  // Path edges: every edge whose target is selected or its descendants up to test
-  const highlightEdges = useMemo(() => {
-    if (!selectedId) return new Set<number>();
-    // Mark edges that participate in any reverse path from selectedId to a covering test
-    const out = new Set<number>();
+  // Path edges + neighbor set (direct connections to the selected node).
+  const { highlightEdges, neighborIds } = useMemo(() => {
+    const edges = new Set<number>();
+    const neighbors = new Set<string>();
+    if (!selectedId) return { highlightEdges: edges, neighborIds: neighbors };
     const reverseAdj = new Map<string, number[]>();
     data.edges.forEach((e, idx) => {
       const list = reverseAdj.get(e.target);
@@ -112,15 +114,19 @@ export const TestPathCanvas = ({
       if (!incoming) continue;
       for (const idx of incoming) {
         const e = data.edges[idx];
-        // only highlight edges along paths that lead to a covering test
-        out.add(idx);
+        edges.add(idx);
         if (!seen.has(e.source)) {
           seen.add(e.source);
           stack.push(e.source);
         }
       }
     }
-    return out;
+    // Direct neighbors (1 hop in either direction) — these get prominent labels.
+    for (const e of data.edges) {
+      if (e.source === selectedId) neighbors.add(e.target);
+      if (e.target === selectedId) neighbors.add(e.source);
+    }
+    return { highlightEdges: edges, neighborIds: neighbors };
   }, [data, selectedId]);
 
   return (
@@ -160,8 +166,10 @@ export const TestPathCanvas = ({
         const isTest = isTestNode(n);
         const isCovering = coveringTestIds.has(n.id);
         const isSelected = selectedId === n.id;
+        const isNeighbor = neighborIds.has(n.id);
         const isUntested = untestedIds.has(n.id);
-        const dim = !!selectedId && !isSelected && !isCovering;
+        const isCovered = !!coveredIds?.has(n.id);
+        const dim = !!selectedId && !isSelected && !isCovering && !isNeighbor;
         return (
           <NodeMark
             key={n.id}
@@ -171,7 +179,10 @@ export const TestPathCanvas = ({
             isTest={isTest}
             isCovering={isCovering}
             isSelected={isSelected}
+            isNeighbor={isNeighbor}
             isUntested={isUntested}
+            isCovered={isCovered}
+            mode={mode}
             dim={dim}
             onClick={() => onSelect(n.id)}
           />
