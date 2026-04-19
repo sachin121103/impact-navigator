@@ -15,8 +15,12 @@ import { CodeGraphCanvas, type AnalysisMode } from "@/components/CodeGraphCanvas
 import { SAMPLE_GRAPH, type GraphPayload } from "@/lib/sample-graph";
 import {
   applyAbstraction,
+  collapseLowSignalSymbols,
+  densityConfig,
   moduleKey,
+  topKSymbols,
   type AbstractionLevel,
+  type DensityLevel,
 } from "@/lib/graph-layers";
 import {
   computeAllMetrics,
@@ -96,6 +100,8 @@ const CodeGraph = () => {
   const [abstractionLevel, setAbstractionLevel] = useState<AbstractionLevel>("module");
   // focusStack[0] = module key (e.g. "src/api"), focusStack[1] = file id
   const [focusStack, setFocusStack] = useState<string[]>([]);
+  // Density slider — controls how aggressively we trim the symbol layer.
+  const [density, setDensity] = useState<DensityLevel>("balanced");
   // Remembers the user's last manually chosen level so search auto-jumping back works.
   const lastManualLevelRef = useRef<AbstractionLevel>("module");
 
@@ -251,10 +257,40 @@ const CodeGraph = () => {
   };
 
   // Apply abstraction transform to the full graph before rendering.
-  const displayData = useMemo(
-    () => applyAbstraction(data, abstractionLevel, focusStack),
-    [data, abstractionLevel, focusStack],
-  );
+  // At symbol level with no focused file (and no active search), reduce
+  // visual clutter by keeping only top-K + high-signal symbols.
+  const { displayData, hiddenByFile, totalSymbolCount, visibleSymbolCount } = useMemo(() => {
+    const base = applyAbstraction(data, abstractionLevel, focusStack);
+    const totalSymbols = base.nodes.filter((n) => n.type !== "file").length;
+
+    const shouldTrim =
+      abstractionLevel === "symbol" &&
+      !focusStack[1] &&
+      !search.trim() &&
+      density !== "all";
+
+    if (!shouldTrim) {
+      return {
+        displayData: base,
+        hiddenByFile: new Map<string, string[]>(),
+        totalSymbolCount: totalSymbols,
+        visibleSymbolCount: totalSymbols,
+      };
+    }
+
+    const cfg = densityConfig(density, totalSymbols);
+    const topped = topKSymbols(base, metrics, cfg.topK);
+    const { payload, hiddenByFile: hbf } = collapseLowSignalSymbols(topped, metrics, {
+      keepRatio: cfg.keepRatio,
+      minPerFile: cfg.minPerFile,
+    });
+    return {
+      displayData: payload,
+      hiddenByFile: hbf,
+      totalSymbolCount: totalSymbols,
+      visibleSymbolCount: payload.nodes.filter((n) => n.type !== "file").length,
+    };
+  }, [data, abstractionLevel, focusStack, search, density, metrics]);
 
   // Click handler that drills down through abstraction levels.
   const handleNodeSelect = (id: string | null) => {
@@ -339,6 +375,14 @@ const CodeGraph = () => {
           search={search}
           metrics={metrics}
           analysisMode={analysisMode}
+          hiddenByFile={hiddenByFile}
+          onExpandFile={(fileId) => {
+            const node = data.nodes.find((n) => n.id === fileId);
+            if (!node) return;
+            lastManualLevelRef.current = "symbol";
+            setFocusStack((prev) => [prev[0] ?? moduleKey(node.file), fileId]);
+            setAbstractionLevel("symbol");
+          }}
         />
       </div>
 
@@ -476,6 +520,43 @@ const CodeGraph = () => {
               })}
             </div>
           </div>
+          {abstractionLevel === "symbol" && !focusStack[1] && !search.trim() && (
+            <div className="flex items-center gap-2 rounded-full border px-3 py-1 shadow-paper font-mono text-[10px]" style={GLASS}>
+              <span style={{ color: T.dim }}>Density</span>
+              <div className="flex items-center gap-0.5">
+                {(["essential", "balanced", "all"] as DensityLevel[]).map((d) => {
+                  const active = density === d;
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => setDensity(d)}
+                      className="rounded-full px-2 py-0.5 transition-all"
+                      style={{
+                        background: active ? "rgba(160,138,110,0.18)" : "transparent",
+                        color: active ? T.ink : T.muted,
+                        fontWeight: active ? 600 : 400,
+                      }}
+                      title={
+                        d === "essential" ? "Top ~50 most important functions"
+                        : d === "balanced" ? "Top ~100 + cross-file callers"
+                        : "Show every function (slow on big repos)"
+                      }
+                    >
+                      {d}
+                    </button>
+                  );
+                })}
+              </div>
+              {visibleSymbolCount < totalSymbolCount && (
+                <span
+                  style={{ color: T.muted }}
+                  title="Hidden functions are still searchable — type a name to reveal."
+                >
+                  · {visibleSymbolCount}/{totalSymbolCount} fns
+                </span>
+              )}
+            </div>
+          )}
           {focusStack.length > 0 && (
             <div className="flex items-center gap-1.5 rounded-full border px-3 py-1 shadow-paper font-mono text-[10px]" style={GLASS}>
               {crumbs.map((c, i) => (
