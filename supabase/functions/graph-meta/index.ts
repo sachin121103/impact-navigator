@@ -1344,7 +1344,7 @@ function buildGraph(files: { path: string; content: string }[]): {
     // .h / .hpp: file node only
   }
 
-  // Resolve deferred calls
+  // Resolve deferred calls (non-JS path: use global fnIndex by bare name).
   for (const [callerId, calleeBare] of pendingCalls) {
     const calleeId = fnIndex[calleeBare];
     if (!calleeId || calleeId === callerId) continue;
@@ -1352,6 +1352,37 @@ function buildGraph(files: { path: string; content: string }[]): {
       (e) => e.source === callerId && e.target === calleeId && e.type === "calls",
     )) {
       edges.push({ source: callerId, target: calleeId, type: "calls" });
+    }
+  }
+
+  // Resolve JS/TS calls through the per-file binding map first. This prevents
+  // wrong-file wiring when many files declare the same short helper name.
+  for (const { callerId, callerFile, callee } of pendingJsCalls) {
+    let calleeId: string | null = null;
+    const bindings = jsBindings.get(callerFile);
+    const targetFile = bindings?.[callee];
+    if (targetFile) {
+      const fileSyms = fnByFile.get(targetFile);
+      if (fileSyms?.[callee]) calleeId = fileSyms[callee];
+      // Default-export pattern: treat any imported binding as the file node
+      // if no symbol matched (still meaningful as "uses this module").
+      if (!calleeId) calleeId = targetFile;
+    }
+    // Same-file resolution: prefer a symbol declared in the caller's own file.
+    if (!calleeId) {
+      const ownSyms = fnByFile.get(callerFile);
+      if (ownSyms?.[callee]) calleeId = ownSyms[callee];
+    }
+    // Last-resort fallback to global fnIndex (kept conservative: only when
+    // there's no ambiguity from imports).
+    if (!calleeId && !bindings?.[callee]) {
+      calleeId = fnIndex[callee] ?? null;
+    }
+    if (!calleeId || calleeId === callerId) continue;
+    if (!edges.some(
+      (e) => e.source === callerId && e.target === calleeId && e.type === "calls",
+    )) {
+      edges.push({ source: callerId, target: calleeId!, type: "calls" });
     }
   }
 
