@@ -271,22 +271,45 @@ const CodeGraph = () => {
             </div>
           )}
           {!isEmpty && (
-            <div className="flex items-center gap-2 rounded-full border px-3 py-1.5 shadow-paper" style={GLASS}>
-              <input
-                value={repoInput}
-                onChange={(e) => setRepoInput(e.target.value)}
-                placeholder="owner/repo"
-                className="w-44 bg-transparent border-0 outline-none font-mono text-xs"
-                style={{ color: T.ink, caretColor: T.accent }}
-                onKeyDown={(e) => e.key === "Enter" && loadRepo()}
-              />
-              <button
-                onClick={loadRepo} disabled={loading}
-                className="flex items-center gap-1 rounded-full px-3 py-1 font-mono text-[11px] transition-colors disabled:opacity-50"
-                style={{ background: "rgba(45,170,160,0.1)", color: T.accent, border: `1px solid rgba(45,170,160,0.3)` }}
-              >
-                {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : "Map"}
-              </button>
+            <div className="flex flex-col items-end gap-1">
+              <div className="flex items-center gap-2 rounded-full border px-3 py-1.5 shadow-paper" style={GLASS}>
+                <input
+                  value={repoInput}
+                  onChange={(e) => setRepoInput(e.target.value)}
+                  placeholder="owner/repo"
+                  className="w-44 bg-transparent border-0 outline-none font-mono text-xs"
+                  style={{ color: T.ink, caretColor: T.accent }}
+                  onKeyDown={(e) => e.key === "Enter" && loadRepo()}
+                />
+                <button
+                  onClick={() => setShowTokenField((v) => !v)}
+                  className="font-mono text-[10px] transition-colors"
+                  style={{ color: showTokenField ? T.accent : T.muted }}
+                  title="Add a GitHub token for private repos"
+                >
+                  🔒
+                </button>
+                <button
+                  onClick={loadRepo} disabled={loading}
+                  className="flex items-center gap-1 rounded-full px-3 py-1 font-mono text-[11px] transition-colors disabled:opacity-50"
+                  style={{ background: "rgba(45,170,160,0.1)", color: T.accent, border: `1px solid rgba(45,170,160,0.3)` }}
+                >
+                  {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : "Map"}
+                </button>
+              </div>
+              {showTokenField && (
+                <div className="flex items-center gap-2 rounded-full border px-3 py-1.5 shadow-paper" style={GLASS}>
+                  <input
+                    type="password"
+                    value={githubToken}
+                    onChange={(e) => setGithubToken(e.target.value)}
+                    placeholder="ghp_… (used once, never stored)"
+                    className="w-64 bg-transparent border-0 outline-none font-mono text-xs"
+                    style={{ color: T.ink, caretColor: T.accent }}
+                    onKeyDown={(e) => e.key === "Enter" && loadRepo()}
+                  />
+                </div>
+              )}
             </div>
           )}
           <Link to="/" className="flex items-center gap-1.5 rounded-full border px-3 py-1.5 font-mono text-xs shadow-paper transition-colors"
