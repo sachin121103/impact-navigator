@@ -56,12 +56,13 @@ const KEEP_EXT = new Set([
   ".c", ".h", ".cpp", ".hpp", ".cc",
   ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
   ".java",
+  ".go", ".rs", ".cs",
 ]);
 // Extensions Meridian recognises but currently chooses not to parse — used only
 // for the "skipped extensions" report so the user knows what was dropped.
 const REPORTABLE_SKIPPED = new Set([
-  ".go", ".rs", ".rb", ".kt", ".kts", ".swift", ".scala", ".php",
-  ".cs", ".m", ".mm", ".dart", ".lua", ".sh", ".pl",
+  ".rb", ".kt", ".kts", ".swift", ".scala", ".php",
+  ".m", ".mm", ".dart", ".lua", ".sh", ".pl",
   ".html", ".css", ".scss", ".vue", ".svelte",
   ".xml", ".yml", ".yaml", ".toml", ".ini", ".properties",
   ".sql", ".graphql", ".proto",
