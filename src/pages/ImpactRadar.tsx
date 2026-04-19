@@ -1,10 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 import { SubPageShell } from "@/components/SubPageShell";
 import { ImpactInput } from "@/components/ImpactInput";
 import { RadarVisual } from "@/components/RadarVisual";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
+
+interface Suggestion {
+  id: string;
+  why: string;
+  fix: string;
+}
+
+type SuggestState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; map: Record<string, Suggestion> };
 
 type RiskLevel = "high" | "medium" | "low";
 
@@ -84,6 +96,8 @@ const ImpactRadar = () => {
   const [repoStatus, setRepoStatus] = useState<RepoStatus>({ state: "empty" });
   const [isIndexing, setIsIndexing] = useState(false);
   const [radarState, setRadarState] = useState<RadarState>({ status: "idle" });
+  const [suggestState, setSuggestState] = useState<SuggestState>({ status: "idle" });
+  const [lastPrompt, setLastPrompt] = useState<string>("");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -160,6 +174,8 @@ const ImpactRadar = () => {
       return;
     }
     setRadarState({ status: "loading" });
+    setSuggestState({ status: "idle" });
+    setLastPrompt(prompt);
     try {
       const { data, error } = await supabase.functions.invoke("run-radar", {
         body: { prompt, repoUrl: repoUrl.trim() },
@@ -169,6 +185,38 @@ const ImpactRadar = () => {
       setRadarState({ status: "result", data: data as RunResult });
     } catch (err) {
       setRadarState({ status: "error", message: (err as Error).message });
+    }
+  };
+
+  const handleExplain = async () => {
+    if (radarState.status !== "result") return;
+    const { resolvedSymbol, affected } = radarState.data;
+    if (affected.length === 0) return;
+    setSuggestState({ status: "loading" });
+    try {
+      const { data, error } = await supabase.functions.invoke("impact-suggest", {
+        body: {
+          prompt: lastPrompt,
+          target: resolvedSymbol,
+          affected: affected.slice(0, 8).map((a) => ({
+            id: a.id,
+            name: a.name,
+            qualified_name: a.qualified_name,
+            kind: a.kind,
+            file_path: a.file_path,
+            risk: a.risk,
+            depth: a.depth,
+          })),
+        },
+      });
+      if (error) throw new Error(error.message);
+      if (!(data as any)?.ok) throw new Error((data as any)?.error ?? "Failed to get suggestions");
+      const suggestions: Suggestion[] = (data as any).suggestions ?? [];
+      const map: Record<string, Suggestion> = {};
+      for (const s of suggestions) map[s.id] = s;
+      setSuggestState({ status: "ready", map });
+    } catch (err) {
+      setSuggestState({ status: "error", message: (err as Error).message });
     }
   };
 
@@ -315,11 +363,88 @@ const ImpactRadar = () => {
             </div>
           </div>
 
+          {/* AI Suggestions — breaking-change explanations */}
+          <div className="rounded-md border border-border bg-card shadow-paper overflow-hidden">
+            <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-border">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-3.5 w-3.5 text-accent" />
+                <span className="text-xs font-mono uppercase tracking-widest text-accent">
+                  Suggestions
+                </span>
+                <span className="text-[10px] font-mono text-muted-foreground">
+                  · why & how to fix
+                </span>
+              </div>
+              {suggestState.status !== "ready" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2.5 font-mono text-xs"
+                  onClick={handleExplain}
+                  disabled={suggestState.status === "loading" || affected.length === 0}
+                >
+                  {suggestState.status === "loading" ? (
+                    <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Analyzing…</>
+                  ) : (
+                    <>Explain top {Math.min(8, affected.length)}</>
+                  )}
+                </Button>
+              )}
+            </div>
+
+            {suggestState.status === "idle" && (
+              <div className="px-4 py-3 text-xs font-mono text-muted-foreground">
+                Get AI explanations of why each file might break and how to fix it.
+              </div>
+            )}
+            {suggestState.status === "loading" && (
+              <div className="px-4 py-3 text-xs font-mono text-muted-foreground animate-pulse">
+                Reasoning about breaking changes…
+              </div>
+            )}
+            {suggestState.status === "error" && (
+              <div className="px-4 py-3 text-xs">
+                <span className="font-mono text-risk-high">error: </span>
+                <span className="text-foreground">{suggestState.message}</span>
+              </div>
+            )}
+            {suggestState.status === "ready" && (
+              <div className="max-h-72 overflow-y-auto divide-y divide-border">
+                {affected.slice(0, 8).map((sym) => {
+                  const sug = suggestState.map[sym.id];
+                  if (!sug) return null;
+                  return (
+                    <div key={sym.id} className="px-4 py-3 space-y-1.5">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className={`${RISK_CLASS[sym.risk]}`}>●</span>
+                        <span className="font-mono text-foreground truncate">{sym.name}</span>
+                        <span className="text-muted-foreground truncate text-[11px]">
+                          {sym.file_path.split("/").slice(-2).join("/")}
+                        </span>
+                      </div>
+                      <p className="text-xs leading-relaxed text-foreground">
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-risk-high mr-1.5">why</span>
+                        {sug.why}
+                      </p>
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-risk-low mr-1.5">fix</span>
+                        {sug.fix}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           <div className="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-muted-foreground">
             <Stat value={String(radarState.data.summary.total)} label="affected" />
             <Stat value={`${radarState.data.durationMs}ms`} label="radar time" />
             <button
-              onClick={() => setRadarState({ status: "idle" })}
+              onClick={() => {
+                setRadarState({ status: "idle" });
+                setSuggestState({ status: "idle" });
+              }}
               className="font-mono text-xs underline underline-offset-2 hover:text-foreground transition-colors"
             >
               reset
