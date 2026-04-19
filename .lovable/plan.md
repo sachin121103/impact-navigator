@@ -1,88 +1,65 @@
 
-The user is on `/code-graph` and wants to reduce visual clutter via layers of abstraction. Let me look at the current graph rendering to design a concrete plan.
-<lov-tool-use id="toolu_vrtx_01BAjouBAGaJkwqZg5w2NrUY" name="code--view" integration-id="code" data="{\"file_path\": \"src/pages/CodeGraph.tsx\"}">
-</lov-tool-use>
-
-<lov-tool-use id="toolu_vrtx_0144jMnH3ktfjwo4UxgdKg39" name="code--view" integration-id="code" data="{\"file_path\": \"src/components/CodeGraphCanvas.tsx\"}">
-</lov-tool-use>
-
-<lov-tool-use id="toolu_vrtx_01Fo7QdjvDfmce3AGi4Xz1tT" name="code--view" integration-id="code" data="{\"file_path\": \"src/lib/sample-graph.ts\", \"lines\": \"1-80\"}">
-</lov-tool-use>
-
-<lov-tool-use id="toolu_vrtx_01XhDVy8Z1mLBn2v1eSskGEF" name="code--view" integration-id="code" data="{\"file_path\": \"src/pages/CodeGraph.tsx\"}">
-</lov-tool-use>
-
-<lov-tool-use id="toolu_vrtx_01F26xoMN9EX8fHoNQiPMKnL" name="code--view" integration-id="code" data="{\"file_path\": \"src/components/CodeGraphCanvas.tsx\"}">
-</lov-tool-use>
-
-<lov-tool-use id="toolu_vrtx_014SyDGvNrCW6fbiAkYika6u" name="code--view" integration-id="code" data="{\"file_path\": \"src/lib/sample-graph.ts\", \"lines\": \"1-80\"}">
-</lov-tool-use>
-I have enough context. Let me present the plan.
-
-<lov-plan>
 
 ## Goal
-Reduce visual clutter in the Code Graph by introducing **layers of abstraction** — start at a high-level "module" view and let users drill down progressively into files, then classes/functions.
+The Functions (symbol) level dumps every class/function from every file into one giant hairball. Reduce what's drawn so it stays readable, without losing the ability to explore detail on demand.
 
-## The 3 Abstraction Levels
+## Strategy: "Show what matters, hide the rest"
 
-```text
-Level 1 — MODULES        Level 2 — FILES          Level 3 — SYMBOLS
-(folders/zones)          (current default-ish)    (full detail)
+Three combined techniques, each cheap to implement:
 
-   ┌─────────┐               ●───●                    ●─●─●
-   │ src/api │──┐         ●──●   ●──●               ●─◆─●─●─●
-   └─────────┘  │         │      │                    ╱│╲
-   ┌─────────┐  │         ●──●───●──●               ●─●─●─●
-   │src/utils│──┘                                      │
-   └─────────┘                                      ●──●──●
-```
+### 1. Default to a focused subgraph instead of the whole repo
+At the Functions level with **no file focused**, today we render every symbol in the repo. Change the default behaviour:
 
-- **Level 1 (Modules)**: collapse every folder (e.g. `src/api`, `src/utils`, `tests`) into a single bubble. Edge weight = number of cross-folder imports/calls. ~10 nodes total — instantly readable.
-- **Level 2 (Files)**: expand to file nodes only. Hide all class/function nodes. Show only `imports`/`include` edges between files. This is the "architecture" view.
-- **Level 3 (Symbols)**: today's full graph — files + classes + functions + calls.
+- If the user lands on Functions level globally (no `focusStack` file), show only the **top N most important symbols** (by PageRank / degree, already computed in the worker) — e.g. top 80 symbols + their direct edges.
+- A small badge in the toolbar reads: `Showing top 80 of 412 functions` with a `Show all` link to opt into the full view.
 
-User switches via a **3-position segmented control** in the top toolbar (next to "Structure / Influence / Bottleneck Risk"). Level persists per session.
+This is the single biggest win — turns 400+ nodes into ~80.
 
-## Progressive disclosure
-- **Default opens at Level 1** (Modules). Far less overwhelming on first paint.
-- **Click a module → zooms into Level 2** filtered to that module's files (others fade to 8% opacity).
-- **Click a file at Level 2 → zooms into Level 3** showing only that file's internal symbols + 1-hop neighbours.
-- A **breadcrumb pill** (`All › src/api › graph.py`) appears top-center so the user always knows where they are and can jump back.
+### 2. Collapse low-signal symbols into their parent file
+Many files have 10+ tiny helpers (1-line getters, private utilities) that clutter the view. Roll them up:
 
-## How it's built (technical)
+- For each file, keep symbols that are **either**: (a) called from outside the file, (b) in the top X% by PageRank, or (c) above a LOC threshold.
+- Remaining symbols collapse into a single `+ N more` chip attached to the file node. Clicking the chip expands that file's full symbol list inline.
 
-1. **New module: `src/lib/graph-layers.ts`**
-   - `collapseToModules(payload)` → groups nodes by `zoneKey(file)` (already exists in `CodeGraphCanvas.tsx`), aggregates edges, returns a tiny `GraphPayload` with synthetic `module:src/api` ids and an `edgeWeight` field.
-   - `collapseToFiles(payload)` → keeps only `type === "file"` nodes and `imports`/`include` edges.
-   - `focusSubgraph(payload, rootId, hops)` → BFS from a root node, returns nodes within N hops.
+### 3. Hide leaf "calls" edges by default
+At Functions level, `calls` edges create most of the spaghetti. Render only:
+- `contains` edges (file → its visible symbols), always.
+- `calls` edges only **between visible symbols** (cross-file or high-importance).
 
-2. **`CodeGraphCanvas.tsx` — minor additions**
-   - Accept a new prop `abstractionLevel: "module" | "file" | "symbol"` and `focusRootId?: string`.
-   - When level changes, the existing `useMemo` that builds `nodes`/`links` runs through the corresponding collapse helper before feeding the simulation. No physics changes needed.
-   - Module nodes render as larger rounded rectangles with the folder name; edge stroke width scales with `edgeWeight`.
-   - Wire `onSelect` so clicking a module/file at higher levels triggers level transition rather than just selection.
+Intra-file low-signal calls disappear unless that file is focused.
 
-3. **`src/pages/CodeGraph.tsx` — UI additions**
-   - Add `abstractionLevel` and `focusStack: string[]` state.
-   - Add segmented control (`Modules | Files | Symbols`) next to the existing Analysis Mode toggle, styled to match.
-   - Add breadcrumb pill (top-center, below analysis toggle) showing `focusStack` with click-to-pop behaviour.
-   - Selecting a module from the click handler pushes onto `focusStack` and steps level down.
+## UI additions
 
-4. **Search behaviour**
-   - Typing in the search box auto-jumps to Level 3 (Symbols) so matches are always visible. Cleared search returns to the user's last manual level.
+- **Toolbar density slider** (3 stops): `Essential · Balanced · All`. Controls N in technique #1 and the threshold in #2.
+- **Per-file expand chip** rendered next to file nodes when symbols are hidden.
+- **Tooltip hint** on hidden-count badge: "Hidden symbols are still searchable" — typing in search reveals matches even if they were collapsed.
+
+## How it's built
+
+1. **`src/lib/graph-layers.ts`** — add:
+   - `topKSymbols(payload, metrics, k)` → returns subgraph of top-k symbol nodes + their files + edges between them.
+   - `collapseLowSignalSymbols(payload, metrics, opts)` → returns `{ payload, hiddenByFile: Map<fileId, string[]> }`.
+
+2. **`src/pages/CodeGraph.tsx`**:
+   - Add `density: "essential" | "balanced" | "all"` state (default `balanced`).
+   - When `abstractionLevel === "symbol"` and no file is focused, pipe `displayData` through `topKSymbols` then `collapseLowSignalSymbols` using the metrics already available from the worker.
+   - Render density slider + hidden-count badge in the existing toolbar row.
+
+3. **`src/components/CodeGraphCanvas.tsx`**:
+   - Accept `hiddenByFile` prop. For each file node with hidden symbols, render a small `+N` chip (group with rect + text) positioned near the node.
+   - Click chip → call new `onExpandFile(fileId)` callback that pushes the file into `focusStack` (existing drill-down path already works).
+
+4. **Search integration**: when search is non-empty, bypass collapsing/top-K so matches always appear (extends the existing "search jumps to Functions level" rule).
 
 ## What stays the same
-- All metrics (PageRank, betweenness, etc.) keep computing on the full graph in the worker — abstraction is purely a render-layer concern.
-- Zone backgrounds, node tooltips, drawer, Architecture Health panel — unchanged.
-- No changes to edge functions or backend.
+- All abstraction-level logic, breadcrumb, module/file collapse, ComposingScrim, worker metrics — untouched.
+- No backend or schema changes.
 
 ## Files touched
-- `src/lib/graph-layers.ts` (new)
-- `src/components/CodeGraphCanvas.tsx` (accept level/focus, branch in nodes/links memo, render module shape)
-- `src/pages/CodeGraph.tsx` (level state, segmented control, breadcrumb)
+- `src/lib/graph-layers.ts` (add 2 helpers)
+- `src/pages/CodeGraph.tsx` (density state, slider, wiring)
+- `src/components/CodeGraphCanvas.tsx` (render `+N` chips, expand callback)
 
 ## Out of scope
-- No changes to indexing, edge functions, or DB schema.
-- No new dependencies.
+- Manual hide/show per node, saved density per repo, animated expand transitions.
 
