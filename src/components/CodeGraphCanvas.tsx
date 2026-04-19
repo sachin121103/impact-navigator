@@ -488,7 +488,11 @@ export const CodeGraphCanvas = ({
       .scaleExtent([0.1, 8])
       .on("zoom", (e) => {
         g.attr("transform", e.transform.toString());
+        transformRef.current = { k: e.transform.k, x: e.transform.x, y: e.transform.y };
         setZoomLevel(e.transform.k);
+        // Wake the simulation so culling re-runs in next tick.
+        const sim = simRef.current as unknown as { __restart?: () => void } | null;
+        sim?.__restart?.();
       });
     zoomRef.current = z;
     svg.call(z as never);
