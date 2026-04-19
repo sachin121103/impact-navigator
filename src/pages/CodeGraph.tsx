@@ -14,6 +14,12 @@ import { Input } from "@/components/ui/input";
 import { CodeGraphCanvas, type AnalysisMode } from "@/components/CodeGraphCanvas";
 import { SAMPLE_GRAPH, type GraphPayload } from "@/lib/sample-graph";
 import {
+  applyAbstraction,
+  moduleKey,
+  moduleNodeId,
+  type AbstractionLevel,
+} from "@/lib/graph-layers";
+import {
   computeAllMetrics,
   topN,
   type GraphMetrics,
