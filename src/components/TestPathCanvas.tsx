@@ -7,6 +7,10 @@ interface Props {
   selectedId: string | null;
   coveringTestIds: Set<string>;
   untestedIds: Set<string>;
+  /** Nodes reached by at least one test — tinted on the canvas in coverage mode. */
+  coveredIds?: Set<string>;
+  /** When "coverage", the canvas tints covered vs untested nodes globally. */
+  mode?: "default" | "coverage";
   onSelect: (id: string | null) => void;
 }
 
