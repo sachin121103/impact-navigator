@@ -321,6 +321,7 @@ export const SentinelGraphCanvas = ({
           );
         })}
       </g>
+      </g>
     </svg>
   );
 };
