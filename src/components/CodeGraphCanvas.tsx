@@ -546,6 +546,10 @@ export const CodeGraphCanvas = ({
         labelRefs.current
           .get(n.id)
           ?.setAttribute("transform", `translate(${n.x},${n.y})`);
+        // Move "+N more" chip with its file node, if present.
+        labelRefs.current
+          .get(`__chip__${n.id}`)
+          ?.setAttribute("transform", `translate(${n.x},${n.y})`);
       }
       updateEdgePaths();
 
