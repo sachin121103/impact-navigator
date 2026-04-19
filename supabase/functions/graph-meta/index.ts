@@ -1223,6 +1223,7 @@ function buildGraph(files: { path: string; content: string }[]): {
       ext === ".jsx" || ext === ".mjs" || ext === ".cjs"
     ) {
       const p = parseJs(f.content);
+      const fileSyms: Record<string, string> = {};
       for (const qn of p.functions) {
         const id = `${f.path}::${qn}`;
         if (!nodes.some((n) => n.id === id)) {
@@ -1231,13 +1232,20 @@ function buildGraph(files: { path: string; content: string }[]): {
         fnIndex[qn] = id;
         const bare = qn.split(".").pop()!;
         if (!(bare in fnIndex)) fnIndex[bare] = id;
+        fileSyms[qn] = id;
+        fileSyms[bare] = id;
       }
       for (const cls of p.classes) {
         const id = `${f.path}::${cls}`;
         if (!nodes.some((n) => n.id === id)) {
           nodes.push({ id, type: "class", file: f.path, name: cls });
         }
+        fileSyms[cls] = id;
       }
+      fnByFile.set(f.path, fileSyms);
+
+      // Resolve import bindings (local name → resolved file path) for this file.
+      const resolvedBindings: Record<string, string> = {};
       for (const spec of new Set(p.imports)) {
         const target = resolveJsImport(f.path, spec, allNodeIds);
         if (target && target !== f.path && !edges.some(
@@ -1246,8 +1254,18 @@ function buildGraph(files: { path: string; content: string }[]): {
           edges.push({ source: f.path, target, type: "imports" });
         }
       }
+      for (const [local, spec] of Object.entries(p.bindings)) {
+        const target = resolveJsImport(f.path, spec, allNodeIds);
+        if (target) resolvedBindings[local] = target;
+      }
+      jsBindings.set(f.path, resolvedBindings);
+
       for (const [caller, callee] of p.calls) {
-        pendingCalls.push([`${f.path}::${caller}`, callee]);
+        pendingJsCalls.push({
+          callerId: `${f.path}::${caller}`,
+          callerFile: f.path,
+          callee,
+        });
       }
     }
     else if (ext === ".go") {
