@@ -253,15 +253,17 @@ export function coverageMetrics(graph: GraphPayload): CoverageMetrics {
 // ─── Dead code ────────────────────────────────────────────────────────────────
 // "Dead" = a symbol nothing else points to. Evidence-based, not absence-based:
 // we exclude dunder methods, public-API exports, framework hooks, and
-// test-covered symbols. Methods that look like dynamic dispatch are demoted
-// to a low-confidence "likely dispatch" bucket instead of being dropped.
+// test-covered symbols. Methods (and module-level funcs in libraries with
+// poor call resolution) are demoted to a low-confidence "likely-dispatch"
+// bucket instead of being dropped, since the parser cannot see method
+// dispatch (`obj.method()`) or external consumers.
 export interface DeadEntry {
   node: GraphNode;
   reason: "no callers" | "no importers" | "orphan test" | "likely-dispatch";
 }
 
 const DUNDER_RE = /^__[a-z][a-z0-9_]*__$/;
-const ENTRY_FILE_RE = /(?:^|\/)(?:setup\.py|conftest\.py|cli\.py|__main__\.py)$|(?:^|\/)bin\//i;
+const ENTRY_FILE_RE = /(?:^|\/)(?:setup\.py|conftest\.py|cli\.py|__main__\.py|manage\.py|wsgi\.py|asgi\.py)$|(?:^|\/)bin\//i;
 const ENTRY_NAMES = new Set([
   "main", "cli", "app", "handler", "lambda_handler",
   "wsgi", "asgi", "application",
@@ -273,12 +275,25 @@ const FRAMEWORK_HOOK_NAMES = new Set([
   "dispatch", "get_queryset", "form_valid", "form_invalid", "clean", "ready",
   "handle", "lifespan",
 ]);
-const FRAMEWORK_HOOK_PREFIXES = ["pytest_", "before_", "after_", "on_"];
+const FRAMEWORK_HOOK_PREFIXES = ["pytest_", "before_", "after_", "on_", "test_"];
 
+// `name` may be:
+//   - "foo"                    → top-level function
+//   - "Class.method"           → method (Python: dot-separated)
+//   - "outer::inner"           → nested (some parsers use ::)
 function bareName(node: GraphNode): string {
+  let n = node.name ?? "";
+  const dc = n.lastIndexOf("::");
+  if (dc >= 0) n = n.slice(dc + 2);
+  const dot = n.lastIndexOf(".");
+  if (dot >= 0) n = n.slice(dot + 1);
+  return n;
+}
+
+function isMethod(node: GraphNode): boolean {
+  if (node.type === "file") return false;
   const n = node.name ?? "";
-  const idx = n.lastIndexOf("::");
-  return idx >= 0 ? n.slice(idx + 2) : n;
+  return n.includes(".") || n.includes("::");
 }
 
 function isDunder(node: GraphNode): boolean {
@@ -296,25 +311,32 @@ function isEntryPoint(node: GraphNode): boolean {
   return ENTRY_NAMES.has(bareName(node));
 }
 
-function isPublicInitExport(node: GraphNode): boolean {
-  // Symbols defined in (or re-exported from) a package __init__.py with a
-  // non-underscore name are part of the public surface.
+// True for symbols that almost certainly form the package public API.
+function isPublicApi(node: GraphNode): boolean {
+  if (node.type === "file") return false;
   const file = node.file ?? "";
-  if (!/(?:^|\/)__init__\.py$/.test(file)) return false;
-  const n = bareName(node);
-  return n.length > 0 && !n.startsWith("_");
-}
+  const bare = bareName(node);
+  if (DUNDER_RE.test(bare)) return false;       // handled separately
+  if (bare.startsWith("_")) return false;       // private convention
 
-function isMethod(node: GraphNode): boolean {
-  return node.type !== "file" && (node.name ?? "").includes("::");
+  if (/(?:^|\/)__init__\.py$/.test(file)) return true;
+  // Conventional public modules in Python packages.
+  if (/(?:^|\/)(?:api|exceptions?|errors?|models|types|public|client)\.py$/i.test(file)) {
+    if (!isMethod(node)) return true;
+  }
+  return false;
 }
 
 function parentClassId(node: GraphNode, nodesById: Map<string, GraphNode>): string | null {
-  // qualified name like "module::Class::method" → look up "module::Class".
   const n = node.name ?? "";
-  const idx = n.lastIndexOf("::");
-  if (idx < 0) return null;
-  const parentName = n.slice(0, idx);
+  let parentName: string | null = null;
+  const dc = n.lastIndexOf("::");
+  if (dc >= 0) parentName = n.slice(0, dc);
+  else {
+    const dot = n.lastIndexOf(".");
+    if (dot >= 0) parentName = n.slice(0, dot);
+  }
+  if (!parentName) return null;
   for (const cand of nodesById.values()) {
     if (cand.type === "class" && cand.name === parentName && cand.file === node.file) {
       return cand.id;
@@ -338,11 +360,21 @@ export function findDeadCode(graph: GraphPayload): DeadEntry[] {
   const outDeg = new Map<string, number>();
   for (const e of graph.edges) outDeg.set(e.source, (outDeg.get(e.source) ?? 0) + 1);
 
+  // ── Coverage-quality gate ───────────────────────────────────────────────
+  // If the call graph is too sparse, we cannot reliably distinguish dead
+  // code from poorly-resolved calls. Demote weak "no callers" signals to
+  // "likely-dispatch" for the whole graph.
+  const codeNodes = graph.nodes.filter(
+    (n) => n.type === "function" || n.type === "class",
+  );
+  const withInbound = codeNodes.filter((n) => (inDegree.get(n.id) ?? 0) > 0).length;
+  const inboundRatio = codeNodes.length ? withInbound / codeNodes.length : 1;
+  const lowConfidenceGraph = codeNodes.length >= 50 && inboundRatio < 0.3;
+
   const out: DeadEntry[] = [];
   for (const n of graph.nodes) {
     const inc = inDegree.get(n.id) ?? 0;
 
-    // Orphan tests stay flagged — they contribute nothing to coverage.
     if (isTestNode(n) && (outDeg.get(n.id) ?? 0) === 0) {
       out.push({ node: n, reason: "orphan test" });
       continue;
@@ -350,7 +382,6 @@ export function findDeadCode(graph: GraphPayload): DeadEntry[] {
 
     if (n.type === "file") {
       if (isTestNode(n)) continue;
-      // Don't flag __init__.py — they're the package public surface.
       if (/(?:^|\/)__init__\.py$/.test(n.file ?? "")) continue;
       if (ENTRY_FILE_RE.test(n.file ?? "")) continue;
       if (inc === 0) out.push({ node: n, reason: "no importers" });
@@ -359,26 +390,24 @@ export function findDeadCode(graph: GraphPayload): DeadEntry[] {
 
     if (inc !== 0) continue;
 
-    // ── Filters: things that *look* unused but aren't ──
-    if (isDunder(n)) continue;              // runtime-invoked
-    if (isFrameworkHook(n)) continue;       // framework-invoked by name
-    if (isEntryPoint(n)) continue;          // CLI / WSGI / etc.
-    if (isPublicInitExport(n)) continue;    // package public API
+    // ── Strong "definitely alive" filters ──────────────────────────────
+    if (isDunder(n)) continue;
+    if (isFrameworkHook(n)) continue;
+    if (isEntryPoint(n)) continue;
+    if (isPublicApi(n)) continue;
 
-    // Test-covered → alive, even if no production caller exists.
+    // Test-covered → alive.
     const tests = findCoveringTests(n.id, nodesById, reverseAdj, 6);
     if (tests.size > 0) continue;
 
-    // Method on a class that *is* used → likely dynamic dispatch (instance.method()).
+    // ── Weak signals → demote to "likely-dispatch" ─────────────────────
     if (isMethod(n)) {
-      const parent = parentClassId(n, nodesById);
-      if (parent) {
-        const parentInc = inDegree.get(parent) ?? 0;
-        if (parentInc > 0) {
-          out.push({ node: n, reason: "likely-dispatch" });
-          continue;
-        }
-      }
+      out.push({ node: n, reason: "likely-dispatch" });
+      continue;
+    }
+    if (lowConfidenceGraph) {
+      out.push({ node: n, reason: "likely-dispatch" });
+      continue;
     }
 
     out.push({ node: n, reason: "no callers" });
