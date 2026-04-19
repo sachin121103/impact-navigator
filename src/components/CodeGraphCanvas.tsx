@@ -164,6 +164,17 @@ export const CodeGraphCanvas = ({
   // Active highlight set, kept in a ref so the tick loop can rebuild the overlay
   // path without re-subscribing to the simulation.
   const highlightRef = useRef<Set<string> | null>(null);
+  // Lets external code (hover effect) rebuild just the edge overlay without
+  // restarting the simulation.
+  const repaintOverlayRef = useRef<(() => void) | null>(null);
+  // Spatial index of nodes for nearest-node hit-testing on pointermove.
+  // Rebuilt on layout settle.
+  const spatialNodesRef = useRef<SimNode[]>([]);
+  // rAF-coalesced + debounced hover pick.
+  const pendingHoverIdRef = useRef<string | null | undefined>(undefined);
+  const hoverRafRef = useRef<number | null>(null);
+  const hoverDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const zoomLevelRef = useRef(1);
 
   const [size, setSize] = useState({ w: 800, h: 640 });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
