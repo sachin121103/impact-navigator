@@ -529,7 +529,7 @@ const CodeGraph = () => {
               </button>
             </div>
             <p className="mt-2.5 font-mono text-[10px] tracking-wide" style={{ color: T.dim }}>
-              Supports Python · JS / TS · C / C++ · Java
+              Supports Python · JS / TS · C / C++ · Java · Go · Rust · C#
             </p>
             <button
               onClick={() => setHasLoadedRepo(true)}
@@ -563,7 +563,7 @@ const CodeGraph = () => {
                 Only <span style={{ color: T.amber, fontWeight: 600 }}>{meta.parsed_file_count ?? meta.file_count}</span> source file{(meta.parsed_file_count ?? meta.file_count) === 1 ? "" : "s"} recognised in this repo.
               </p>
               <p className="mt-1 font-mono text-[10px]" style={{ color: T.muted }}>
-                Meridian currently parses Python, JS / TS, C / C++, and Java.
+                Meridian currently parses Python, JS / TS, C / C++, Java, Go, Rust, and C#.
                 {meta.skipped_extensions && Object.keys(meta.skipped_extensions).length > 0 && (
                   <>
                     {" "}Skipped:{" "}
