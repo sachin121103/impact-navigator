@@ -180,3 +180,123 @@ export function applyAbstraction(
   }
   return working;
 }
+
+// ─── Density helpers (symbol-level only) ─────────────────────────────────────
+
+export type DensityLevel = "essential" | "balanced" | "all";
+
+/**
+ * Returns the top-K most important symbol nodes (by PageRank), plus their
+ * parent file nodes, plus all edges between the resulting node set.
+ * File nodes themselves are always retained (they're the structural skeleton).
+ */
+export function topKSymbols(
+  payload: GraphPayload,
+  metrics: GraphMetrics | undefined,
+  k: number,
+): GraphPayload {
+  const symbolNodes = payload.nodes.filter((n) => n.type !== "file");
+  if (symbolNodes.length <= k) return payload;
+
+  const score = (id: string) => metrics?.pagerank.get(id) ?? 0;
+  const ranked = [...symbolNodes].sort((a, b) => score(b.id) - score(a.id));
+  const keepSymbolIds = new Set(ranked.slice(0, k).map((n) => n.id));
+
+  const keep = new Set<string>();
+  for (const n of payload.nodes) {
+    if (n.type === "file") keep.add(n.id);
+    else if (keepSymbolIds.has(n.id)) keep.add(n.id);
+  }
+
+  const nodes = payload.nodes.filter((n) => keep.has(n.id));
+  const edges = payload.edges.filter(
+    (e) => keep.has(e.source) && keep.has(e.target),
+  );
+  return { nodes, edges };
+}
+
+/**
+ * Per file, drop low-signal symbols (low PageRank, no cross-file edges).
+ * Returns the trimmed payload and a map of fileId → hidden symbol ids so the
+ * UI can render a "+N more" affordance.
+ */
+export function collapseLowSignalSymbols(
+  payload: GraphPayload,
+  metrics: GraphMetrics | undefined,
+  opts: { keepRatio: number; minPerFile: number } = { keepRatio: 0.5, minPerFile: 2 },
+): { payload: GraphPayload; hiddenByFile: Map<string, string[]> } {
+  // Build cross-file edge index over symbol nodes.
+  const fileOf = new Map<string, string>();
+  for (const n of payload.nodes) fileOf.set(n.id, n.file);
+
+  const crossFile = new Set<string>();
+  for (const e of payload.edges) {
+    const sf = fileOf.get(e.source);
+    const tf = fileOf.get(e.target);
+    if (sf && tf && sf !== tf) {
+      crossFile.add(e.source);
+      crossFile.add(e.target);
+    }
+  }
+
+  // Group symbols by file.
+  const byFile = new Map<string, GraphNode[]>();
+  for (const n of payload.nodes) {
+    if (n.type === "file") continue;
+    const arr = byFile.get(n.file) ?? [];
+    arr.push(n);
+    byFile.set(n.file, arr);
+  }
+
+  const score = (id: string) => metrics?.pagerank.get(id) ?? 0;
+  const keepSymbolIds = new Set<string>();
+  const hiddenByFile = new Map<string, string[]>();
+
+  for (const [, syms] of byFile) {
+    const sorted = [...syms].sort((a, b) => score(b.id) - score(a.id));
+    const keepCount = Math.max(opts.minPerFile, Math.ceil(sorted.length * opts.keepRatio));
+    const kept: GraphNode[] = [];
+    const hidden: GraphNode[] = [];
+    for (const s of sorted) {
+      const mustKeep = crossFile.has(s.id) || kept.length < keepCount;
+      if (mustKeep) kept.push(s);
+      else hidden.push(s);
+    }
+    for (const s of kept) keepSymbolIds.add(s.id);
+    if (hidden.length > 0) {
+      // Resolve file node id (matches by .file path).
+      const fileNode = payload.nodes.find((n) => n.type === "file" && n.file === hidden[0].file);
+      if (fileNode) hiddenByFile.set(fileNode.id, hidden.map((h) => h.id));
+    }
+  }
+
+  const keep = new Set<string>();
+  for (const n of payload.nodes) {
+    if (n.type === "file") keep.add(n.id);
+    else if (keepSymbolIds.has(n.id)) keep.add(n.id);
+  }
+
+  const nodes = payload.nodes.filter((n) => keep.has(n.id));
+  const edges = payload.edges.filter(
+    (e) => keep.has(e.source) && keep.has(e.target),
+  );
+  return { payload: { nodes, edges }, hiddenByFile };
+}
+
+/**
+ * Map density level → tuning knobs for topK + collapse.
+ */
+export function densityConfig(level: DensityLevel, totalSymbols: number): {
+  topK: number;
+  keepRatio: number;
+  minPerFile: number;
+} {
+  if (level === "all") {
+    return { topK: totalSymbols, keepRatio: 1, minPerFile: 999 };
+  }
+  if (level === "essential") {
+    return { topK: 50, keepRatio: 0.25, minPerFile: 1 };
+  }
+  // balanced
+  return { topK: 100, keepRatio: 0.5, minPerFile: 2 };
+}
