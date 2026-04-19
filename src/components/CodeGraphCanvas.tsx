@@ -308,24 +308,36 @@ export const CodeGraphCanvas = ({
           ),
       )
       .force("charge", forceManyBody().strength(physics.repel))
-      .force("collide", forceCollide<SimNode>().radius((d) => nodeR(d) + 14))
+      .force(
+        "collide",
+        forceCollide<SimNode>().radius((d) => nodeR(d) + ((d.degree ?? 0) > 0 ? 8 : 5)),
+      )
       .force(
         "x",
         forceX<SimNode>((d) => {
           const k = zoneByNodeId.get(d.id);
           return (k && zoneAnchors.get(k)?.cx) ?? size.w / 2;
-        }).strength(physics.centerStrength),
+        }).strength((d) => {
+          const deg = d.degree ?? 0;
+          const scale = deg === 0 ? 0.15 : Math.min(1, 0.4 + deg * 0.1);
+          return physics.centerStrength * scale;
+        }),
       )
       .force(
         "y",
         forceY<SimNode>((d) => {
           const k = zoneByNodeId.get(d.id);
           return (k && zoneAnchors.get(k)?.cy) ?? size.h / 2;
-        }).strength(physics.centerStrength),
+        }).strength((d) => {
+          const deg = d.degree ?? 0;
+          const scale = deg === 0 ? 0.15 : Math.min(1, 0.4 + deg * 0.1);
+          return physics.centerStrength * scale;
+        }),
       )
       // Stop the auto-tick — we'll pre-warm silently then let it run.
       .alpha(1)
       .alphaDecay(0.04)
+      .velocityDecay(0.6)
       .stop();
     // Build zone-member index once per (re-)build for fast bbox recompute.
     const zoneMembersByKey = new Map<string, SimNode[]>();
