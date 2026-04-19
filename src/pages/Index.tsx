@@ -17,10 +17,10 @@ const Index = () => {
             Meridian<span className="text-accent">.</span>
           </span>
         </Link>
-        <nav className="hidden items-center gap-7 text-sm text-muted-foreground md:flex">
-          <Link to="/code-graph" className="hover:text-foreground transition-colors">Code Graph</Link>
-          <Link to="/testpath" className="hover:text-foreground transition-colors">TestPath</Link>
-          <Link to="/impact-radar" className="hover:text-foreground transition-colors">Impact Radar</Link>
+        <nav className="pointer-events-none absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 items-center gap-7 text-sm text-muted-foreground md:flex">
+          <Link to="/code-graph" className="pointer-events-auto hover:text-foreground transition-colors">Code Graph</Link>
+          <Link to="/testpath" className="pointer-events-auto hover:text-foreground transition-colors">TestPath</Link>
+          <Link to="/impact-radar" className="pointer-events-auto hover:text-foreground transition-colors">Impact Radar</Link>
         </nav>
         {user ? (
           <div className="flex items-center gap-2">
