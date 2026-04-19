@@ -3,7 +3,6 @@ import { Loader2, Code2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
-import { SnippetImpactGraph } from "@/components/SnippetImpactGraph";
 
 type RiskLevel = "high" | "medium" | "low";
 
@@ -130,11 +129,6 @@ export const CodeImpactPanel = ({ repoUrl }: { repoUrl: string }) => {
               </div>
             ) : (
               <>
-                <SnippetImpactGraph
-                  matched={state.data.matched}
-                  affected={state.data.affected}
-                />
-
                 <div className="rounded-md border border-border bg-background overflow-hidden">
                   <div className="px-3 py-1.5 border-b border-border text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
                     matched in repo

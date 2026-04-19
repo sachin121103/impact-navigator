@@ -38,32 +38,69 @@ const STOPWORDS = new Set([
   "true","false","null","new","this","import","from","export","class","public","private","static",
   "include","define","struct","typedef","sizeof","break","continue","switch","case","default",
   "try","catch","throw","async","await","yield","of","in","do","unsigned","signed","long","short",
+  // Common JS/TS noise that masquerades as identifiers but rarely indicates real symbol usage
+  "console","log","warn","error","debug","info","require","module","exports",
+  "useState","useEffect","useMemo","useCallback","useRef","useContext","useReducer",
+  "Promise","Array","Object","String","Number","Boolean","Math","JSON","Date","Map","Set",
+  "parseInt","parseFloat","setTimeout","setInterval","fetch","get","set","push","pop",
+  "map","filter","reduce","forEach","slice","splice","concat","join","split","includes",
+  "length","value","name","type","id","key","data","props","state","children",
+  // Single/double-letter common temporaries
+  "i","j","k","x","y","z","a","b","c","e","el","fn","cb",
+]);
+// Identifiers that are too generic to trust without strong signals (member access).
+const COMMON_NAMES = new Set([
+  "update","render","init","setup","run","start","stop","close","open","load","save",
+  "create","delete","remove","add","find","check","handle","process","build","format",
+  "parse","validate","read","write","apply","reset","clear","next","prev","done",
+  "value","name","type","key","data","item","items","list","result","results","entry",
 ]);
 
-function extractIdentifiers(code: string): Set<string> {
+interface IdentifierHit {
+  name: string;
+  // Number of times this identifier appears in the snippet (call or member access).
+  occurrences: number;
+  // True if at least one occurrence was via member access (.foo / ::foo / ->foo)
+  // or as a call site — strongest evidence of actual usage.
+  hasCall: boolean;
+  hasMember: boolean;
+}
+
+function extractIdentifiers(code: string): Map<string, IdentifierHit> {
   // Strip strings and single/multi-line comments to reduce noise.
   const cleaned = code
     .replace(/\/\*[\s\S]*?\*\//g, " ")
     .replace(/\/\/[^\n]*/g, " ")
     .replace(/#[^\n]*/g, " ")
     .replace(/"(?:\\.|[^"\\])*"/g, " ")
-    .replace(/'(?:\\.|[^'\\])*'/g, " ");
+    .replace(/'(?:\\.|[^'\\])*'/g, " ")
+    .replace(/`(?:\\.|[^`\\])*`/g, " ");
 
-  const ids = new Set<string>();
+  const hits = new Map<string, IdentifierHit>();
+  const bump = (name: string, kind: "call" | "member") => {
+    if (name.length < 3) return;
+    if (STOPWORDS.has(name)) return;
+    const cur = hits.get(name) ?? { name, occurrences: 0, hasCall: false, hasMember: false };
+    cur.occurrences++;
+    if (kind === "call") cur.hasCall = true;
+    else cur.hasMember = true;
+    hits.set(name, cur);
+  };
+
   // Function-call-like: identifier followed by (
   const callRe = /\b([A-Za-z_][A-Za-z0-9_]{1,})\s*\(/g;
   let m: RegExpExecArray | null;
-  while ((m = callRe.exec(cleaned)) !== null) {
-    const name = m[1];
-    if (!STOPWORDS.has(name)) ids.add(name);
-  }
+  while ((m = callRe.exec(cleaned)) !== null) bump(m[1], "call");
+
   // Member-access tail: .foo or ::foo or ->foo
   const memberRe = /(?:\.|::|->)([A-Za-z_][A-Za-z0-9_]{1,})/g;
-  while ((m = memberRe.exec(cleaned)) !== null) {
-    const name = m[1];
-    if (!STOPWORDS.has(name)) ids.add(name);
-  }
-  return ids;
+  while ((m = memberRe.exec(cleaned)) !== null) bump(m[1], "member");
+
+  // JSX components: <Capitalized
+  const jsxRe = /<([A-Z][A-Za-z0-9_]*)/g;
+  while ((m = jsxRe.exec(cleaned)) !== null) bump(m[1], "call");
+
+  return hits;
 }
 
 Deno.serve(async (req) => {
@@ -110,8 +147,8 @@ Deno.serve(async (req) => {
     }
     const repoId = (repo as any).id;
 
-    const ids = extractIdentifiers(code);
-    if (ids.size === 0) throw new Error("Could not find any identifiers in the snippet");
+    const idHits = extractIdentifiers(code);
+    if (idHits.size === 0) throw new Error("Could not find any identifiers in the snippet");
 
     const { data: symbols, error: symErr } = await userClient
       .from("symbols")
@@ -129,18 +166,75 @@ Deno.serve(async (req) => {
       byName.set(s.name, arr);
     }
 
-    // Resolve identifier hits → matched symbols in the repo.
+    // ── Accuracy filter ──────────────────────────────────────────────────────
+    // For each identifier hit, decide whether to trust the match and which of
+    // the (possibly many) same-named symbols actually belong.
+    //
+    // Rules:
+    //  1. Skip generic/common names (e.g. "update", "render") unless we have a
+    //     member-access signal (`.update()`) — bare calls to common names cause
+    //     huge false-positive blasts.
+    //  2. If a name resolves to >8 symbols across the repo, it's almost certainly
+    //     ambiguous — drop it unless the snippet co-mentions another identifier
+    //     that exists in the same file (then prefer that file's match only).
+    //  3. Co-location boost: when an identifier is ambiguous (2-8 candidates),
+    //     prefer the candidate whose file also contains other matched
+    //     identifiers from the snippet. If none co-locate, fall back to all
+    //     candidates only when the snippet has fewer than 4 hits total
+    //     (otherwise the user clearly pasted a real chunk and we should be
+    //     strict about ambiguity).
     const matched: any[] = [];
     const matchedIds = new Set<string>();
-    for (const id of ids) {
-      const hits = byName.get(id);
-      if (!hits) continue;
-      for (const h of hits) {
-        if (!matchedIds.has(h.id)) {
-          matchedIds.add(h.id);
-          matched.push(h);
+    const totalSnippetHits = idHits.size;
+
+    // Pre-build a "files in which any matched identifier could live" set so
+    // co-location can boost ambiguous picks. Done in two passes: first the
+    // unambiguous matches, then the ambiguous ones using that anchor.
+    const anchorFiles = new Set<string>();
+    const ambiguousQueue: { hit: IdentifierHit; cands: any[] }[] = [];
+
+    for (const hit of idHits.values()) {
+      const cands = byName.get(hit.name);
+      if (!cands || cands.length === 0) continue;
+
+      // Common-name guard
+      if (COMMON_NAMES.has(hit.name) && !hit.hasMember) continue;
+
+      if (cands.length === 1) {
+        const c = cands[0];
+        if (!matchedIds.has(c.id)) {
+          matchedIds.add(c.id);
+          matched.push(c);
+          anchorFiles.add(c.file_path);
+        }
+      } else {
+        ambiguousQueue.push({ hit, cands });
+      }
+    }
+
+    for (const { hit, cands } of ambiguousQueue) {
+      // Hard ambiguity ceiling: too many same-named symbols ⇒ require co-location.
+      const colocated = cands.filter((c) => anchorFiles.has(c.file_path));
+      if (colocated.length > 0) {
+        for (const c of colocated) {
+          if (!matchedIds.has(c.id)) {
+            matchedIds.add(c.id);
+            matched.push(c);
+          }
+        }
+        continue;
+      }
+      // No co-location: only accept when ambiguity is mild AND the snippet is
+      // short enough that we can't expect overlap.
+      if (cands.length <= 3 && totalSnippetHits < 4 && hit.hasMember) {
+        for (const c of cands) {
+          if (!matchedIds.has(c.id)) {
+            matchedIds.add(c.id);
+            matched.push(c);
+          }
         }
       }
+      // Otherwise drop — better to miss than to wire phantom blasts.
     }
 
     if (matched.length === 0) {
@@ -150,7 +244,7 @@ Deno.serve(async (req) => {
           matched: [],
           affected: [],
           summary: { high: 0, medium: 0, low: 0, total: 0 },
-          identifiers: [...ids].slice(0, 50),
+          identifiers: [...idHits.keys()].slice(0, 50),
           durationMs: Date.now() - startedAt,
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -235,7 +329,7 @@ Deno.serve(async (req) => {
         })),
         affected,
         summary,
-        identifiers: [...ids].slice(0, 50),
+        identifiers: [...idHits.keys()].slice(0, 50),
         durationMs: Date.now() - startedAt,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
