@@ -3,6 +3,7 @@ import { Loader2, Code2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
+import { SnippetImpactGraph } from "@/components/SnippetImpactGraph";
 
 type RiskLevel = "high" | "medium" | "low";
 
