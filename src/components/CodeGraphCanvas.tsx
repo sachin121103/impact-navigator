@@ -170,6 +170,9 @@ export const CodeGraphCanvas = ({
   const [zoomLevel, setZoomLevel] = useState(1);
   // Bumped only on simulation settle / data change — NOT every tick.
   const [layoutVersion, setLayoutVersion] = useState(0);
+  // Composing = pre-warm in progress; settled = first cooldown reached.
+  const [composing, setComposing] = useState(true);
+  const [settled, setSettled] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showZones, setShowZones] = useState(true);
   const [focusMode, setFocusMode] = useState(false);
