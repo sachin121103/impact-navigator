@@ -335,13 +335,13 @@ const TestPath = () => {
             {/* ── DEAD CODE ── Functions nothing else calls. */}
             <TabsContent value="dead" className="mt-4 space-y-3">
               <p className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">Dead functions.</span> Functions or classes that nothing else calls from outside their own file. Click one to highlight it on the graph and see exactly where it lives.
+                <span className="font-medium text-foreground">Dead functions.</span> Functions with no callers, no tests, and no exports. Public APIs and dunder methods are excluded. Click one to highlight it on the graph.
               </p>
               <div className="grid grid-cols-2 gap-2 text-center">
                 <Stat label="dead fns" value={deadFunctions.length} tone={deadFunctions.length ? "destructive" : undefined} />
                 <Stat label="of total" value={data.nodes.filter((n) => n.type === "function" || n.type === "class").length} />
               </div>
-              <ul className="max-h-[320px] space-y-1 overflow-auto rounded-md border border-border/60 p-1.5">
+              <ul className="max-h-[260px] space-y-1 overflow-auto rounded-md border border-border/60 p-1.5">
                 {deadFunctions.map((d) => {
                   const active = modifiedId === d.node.id;
                   return (
@@ -367,6 +367,35 @@ const TestPath = () => {
                   </li>
                 )}
               </ul>
+
+              {dispatchFunctions.length > 0 && (
+                <details className="rounded-md border border-border/60 bg-background/40">
+                  <summary className="cursor-pointer px-2.5 py-2 text-xs text-muted-foreground hover:text-foreground">
+                    <span className="font-medium text-foreground">Possibly unused</span> · {dispatchFunctions.length} method{dispatchFunctions.length === 1 ? "" : "s"} on used classes — likely called via instance dispatch (low confidence)
+                  </summary>
+                  <ul className="max-h-[200px] space-y-1 overflow-auto p-1.5">
+                    {dispatchFunctions.map((d) => {
+                      const active = modifiedId === d.node.id;
+                      return (
+                        <li key={d.node.id}>
+                          <button
+                            onClick={() => setModifiedId(d.node.id)}
+                            className={`grid w-full grid-cols-[1fr_auto] items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${active ? "bg-accent/15 ring-1 ring-accent/40" : "hover:bg-secondary"}`}
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate">{d.node.name}</p>
+                              <p className="truncate font-mono text-[10px] text-muted-foreground">{d.node.file}</p>
+                            </div>
+                            <Badge variant="outline" className="shrink-0 font-mono text-[9px]">
+                              dispatch?
+                            </Badge>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </details>
+              )}
             </TabsContent>
 
             {/* ── PR MODE ── */}
