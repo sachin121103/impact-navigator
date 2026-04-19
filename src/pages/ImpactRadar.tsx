@@ -80,10 +80,67 @@ const fetchRepoLanguage = async (url: string): Promise<string | null> => {
   }
 };
 
-const RISK_CLASS: Record<RiskLevel, string> = {
-  high: "text-risk-high",
-  medium: "text-risk-med",
-  low: "text-risk-low",
+type Criticality = "critical" | "significant" | "moderate" | "minor";
+
+const CRIT_META: Record<Criticality, { label: string; color: string; bg: string; border: string; blurb: string }> = {
+  critical: {
+    label: "CRITICAL",
+    color: "text-risk-high",
+    bg: "bg-risk-high/5",
+    border: "border-risk-high/40",
+    blurb: "touches a core symbol with broad reach — expect cascading breakage",
+  },
+  significant: {
+    label: "SIGNIFICANT",
+    color: "text-risk-med",
+    bg: "bg-risk-med/5",
+    border: "border-risk-med/40",
+    blurb: "non-trivial blast radius — review every caller before shipping",
+  },
+  moderate: {
+    label: "MODERATE",
+    color: "text-accent",
+    bg: "bg-accent/5",
+    border: "border-accent/30",
+    blurb: "localized impact — a handful of call sites need a quick look",
+  },
+  minor: {
+    label: "MINOR",
+    color: "text-risk-low",
+    bg: "bg-risk-low/5",
+    border: "border-risk-low/30",
+    blurb: "isolated change — safe to ship with a sanity check",
+  },
+};
+
+/**
+ * Criticality of a described change = function of the target's centrality
+ * (fan_in of the resolved symbol) and the blast radius (how many downstream
+ * symbols are affected, weighted by how shallow they sit in the call graph).
+ */
+const computeCriticality = (
+  affected: AffectedSymbol[],
+  targetFanIn: number,
+): { level: Criticality; reasons: string[] } => {
+  const total = affected.length;
+  // Shallow callers (depth ≤ 2) matter much more than deep transitive ones.
+  const shallow = affected.filter((a) => a.depth <= 2).length;
+  const isCoreTarget = targetFanIn >= 8;
+  const isWidelyUsedTarget = targetFanIn >= 3;
+
+  const reasons: string[] = [];
+  if (isCoreTarget) reasons.push(`target is a core symbol (${targetFanIn} direct callers)`);
+  else if (isWidelyUsedTarget) reasons.push(`target is used by ${targetFanIn} other symbols`);
+  if (total > 0) reasons.push(`${total} downstream symbols affected`);
+  if (shallow > 0) reasons.push(`${shallow} are immediate callers`);
+
+  let level: Criticality;
+  if (isCoreTarget || total >= 25 || shallow >= 8) level = "critical";
+  else if (isWidelyUsedTarget || total >= 10 || shallow >= 3) level = "significant";
+  else if (total >= 3) level = "moderate";
+  else level = "minor";
+
+  return { level, reasons };
 };
 
 const isGitHubUrl = (url: string) => {
