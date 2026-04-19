@@ -363,11 +363,80 @@ const ImpactRadar = () => {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-muted-foreground">
-            <Stat value={String(radarState.data.summary.total)} label="affected" />
-            <Stat value={`${radarState.data.durationMs}ms`} label="radar time" />
-            <button
-              onClick={() => setRadarState({ status: "idle" })}
+          {/* AI Suggestions — breaking-change explanations */}
+          <div className="rounded-md border border-border bg-card shadow-paper overflow-hidden">
+            <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-border">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-3.5 w-3.5 text-accent" />
+                <span className="text-xs font-mono uppercase tracking-widest text-accent">
+                  Suggestions
+                </span>
+                <span className="text-[10px] font-mono text-muted-foreground">
+                  · why & how to fix
+                </span>
+              </div>
+              {suggestState.status !== "ready" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2.5 font-mono text-xs"
+                  onClick={handleExplain}
+                  disabled={suggestState.status === "loading" || affected.length === 0}
+                >
+                  {suggestState.status === "loading" ? (
+                    <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Analyzing…</>
+                  ) : (
+                    <>Explain top {Math.min(8, affected.length)}</>
+                  )}
+                </Button>
+              )}
+            </div>
+
+            {suggestState.status === "idle" && (
+              <div className="px-4 py-3 text-xs font-mono text-muted-foreground">
+                Get AI explanations of why each file might break and how to fix it.
+              </div>
+            )}
+            {suggestState.status === "loading" && (
+              <div className="px-4 py-3 text-xs font-mono text-muted-foreground animate-pulse">
+                Reasoning about breaking changes…
+              </div>
+            )}
+            {suggestState.status === "error" && (
+              <div className="px-4 py-3 text-xs">
+                <span className="font-mono text-risk-high">error: </span>
+                <span className="text-foreground">{suggestState.message}</span>
+              </div>
+            )}
+            {suggestState.status === "ready" && (
+              <div className="max-h-72 overflow-y-auto divide-y divide-border">
+                {affected.slice(0, 8).map((sym) => {
+                  const sug = suggestState.map[sym.id];
+                  if (!sug) return null;
+                  return (
+                    <div key={sym.id} className="px-4 py-3 space-y-1.5">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className={`${RISK_CLASS[sym.risk]}`}>●</span>
+                        <span className="font-mono text-foreground truncate">{sym.name}</span>
+                        <span className="text-muted-foreground truncate text-[11px]">
+                          {sym.file_path.split("/").slice(-2).join("/")}
+                        </span>
+                      </div>
+                      <p className="text-xs leading-relaxed text-foreground">
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-risk-high mr-1.5">why</span>
+                        {sug.why}
+                      </p>
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-risk-low mr-1.5">fix</span>
+                        {sug.fix}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
               className="font-mono text-xs underline underline-offset-2 hover:text-foreground transition-colors"
             >
               reset
