@@ -322,22 +322,53 @@ const NodeMark = ({
       opacity={opacity}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
     >
+      {/* Coverage radial wash behind covered nodes — feels like soft light. */}
+      {mode === "coverage" && isCovered && !isSelected && (
+        <circle r={r + 14} fill="url(#tp-cov-wash)" />
+      )}
+      {/* Untested nodes throb with a destructive dashed ring. */}
       {isUntested && mode !== "coverage" && (
-        <circle r={r + 3} fill="none" stroke="hsl(var(--destructive))" strokeWidth={0.8} opacity={0.55} strokeDasharray="2 2" />
+        <circle r={r + 3} fill="none" stroke="hsl(var(--destructive))" strokeWidth={0.8} opacity={0.55} strokeDasharray="2 2">
+          <animate attributeName="r" values={`${r + 3};${r + 5};${r + 3}`} dur="2.4s" repeatCount="indefinite" />
+        </circle>
       )}
       {mode === "coverage" && isCovered && !isSelected && (
-        <circle r={r + 5} fill="hsl(var(--accent))" opacity={0.12} />
+        <circle r={r + 5} fill="hsl(var(--accent))" opacity={0.18} />
       )}
+      {/* Covering tests pulse a ring outward. */}
       {isCovering && !isSelected && (
-        <circle r={r + 4} fill="none" stroke="hsl(var(--accent))" strokeWidth={1} opacity={0.5} />
+        <>
+          <circle r={r + 4} fill="none" stroke="hsl(var(--accent))" strokeWidth={1} opacity={0.5} />
+          <circle r={r + 4} fill="none" stroke="hsl(var(--accent))" strokeWidth={1}>
+            <animate attributeName="r" values={`${r + 4};${r + 14}`} dur="1.8s" repeatCount="indefinite" />
+            <animate attributeName="opacity" values="0.55;0" dur="1.8s" repeatCount="indefinite" />
+          </circle>
+        </>
       )}
       {isNeighbor && !isSelected && (
         <circle r={r + 3} fill="none" stroke="hsl(var(--accent))" strokeWidth={1.2} opacity={0.85} />
       )}
+      {/* Selected node — soft glow + slow pulse + crisp ring. */}
+      {isSelected && (
+        <>
+          <circle r={r + 10} fill="hsl(var(--accent))" opacity={0.18} filter="url(#tp-glow)">
+            <animate attributeName="r" values={`${r + 8};${r + 14};${r + 8}`} dur="2.2s" repeatCount="indefinite" />
+            <animate attributeName="opacity" values="0.25;0.1;0.25" dur="2.2s" repeatCount="indefinite" />
+          </circle>
+          <circle r={r + 5} fill="none" stroke="hsl(var(--accent))" strokeWidth={1.2} opacity={0.9} />
+        </>
+      )}
       {node.type === "file" ? (
-        <rect x={-r} y={-r} width={r * 2} height={r * 2} fill={fill} />
+        <rect
+          x={-r}
+          y={-r}
+          width={r * 2}
+          height={r * 2}
+          fill={fill}
+          filter={isSelected ? "url(#tp-glow)" : undefined}
+        />
       ) : (
-        <circle r={r} fill={fill} />
+        <circle r={r} fill={fill} filter={isSelected ? "url(#tp-glow)" : undefined} />
       )}
       {/* Label background for emphasized labels so they're readable above edges. */}
       {emphasized && (
