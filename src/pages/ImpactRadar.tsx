@@ -511,7 +511,7 @@ const ImpactRadar = () => {
                   return (
                     <div key={sym.id} className="px-4 py-3 space-y-1.5">
                       <div className="flex items-center gap-2 text-xs">
-                        <span className={`${RISK_CLASS[sym.risk]}`}>●</span>
+                        <span className="font-mono text-foreground truncate">{sym.name}</span>
                         <span className="font-mono text-foreground truncate">{sym.name}</span>
                         <span className="text-muted-foreground truncate text-[11px]">
                           {sym.file_path.split("/").slice(-2).join("/")}
