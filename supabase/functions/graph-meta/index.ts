@@ -869,7 +869,22 @@ interface JsParsed {
   classes: string[];
   imports: string[];
   calls: [string, string][];
+  // Map from local-binding name → import spec (e.g. "Button" → "@/components/ui/button").
+  // Used downstream to resolve callees/JSX components to the file that defined them
+  // instead of guessing by bare name across the whole repo.
+  bindings: Record<string, string>;
 }
+
+// Lowercase HTML tags we should NOT treat as React component references.
+const JSX_HTML_TAGS = new Set([
+  "div", "span", "a", "p", "h1", "h2", "h3", "h4", "h5", "h6",
+  "ul", "ol", "li", "img", "input", "button", "form", "label",
+  "section", "article", "header", "footer", "nav", "main", "aside",
+  "table", "thead", "tbody", "tr", "td", "th", "br", "hr",
+  "svg", "path", "circle", "rect", "line", "g", "text", "defs",
+  "select", "option", "textarea", "iframe", "video", "audio",
+  "canvas", "code", "pre", "strong", "em", "small", "b", "i",
+]);
 
 const JS_CALL_RE = /\b([A-Za-z_$][\w$]*)\s*\(/g;
 
