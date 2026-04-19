@@ -255,7 +255,9 @@ Deno.serve(async (req) => {
     const top = scored[0];
     const second = scored[1];
 
-    if (!top || top.score < 12) {
+    // Acceptance floor: even a weak fuzzy/component hit lands ≥ 4. Anything
+    // below is just the kind-bonus on unrelated symbols.
+    if (!top || top.score < 4) {
       const candidates = scored.slice(0, 5).map((s) => s.sym.qualified_name);
       throw new Error(
         candidates.length
@@ -263,12 +265,12 @@ Deno.serve(async (req) => {
           : "Could not identify a symbol from the prompt — try including the exact function or method name.",
       );
     }
-    if (second && top.score < 22 && top.score - second.score < 4) {
+    // Ambiguity guard: only reject when the top is a weak fuzzy hit AND the
+    // runner-up is essentially tied. A clear winner always passes through.
+    if (second && top.score < 12 && top.score - second.score < 1) {
+      const candidates = scored.slice(0, 4).map((s) => s.sym.qualified_name);
       throw new Error(
-        `Ambiguous — multiple symbols match equally well: ${scored
-          .slice(0, 4)
-          .map((s) => s.sym.qualified_name)
-          .join(", ")}. Be more specific.`,
+        `Ambiguous — multiple symbols match equally well: ${candidates.join(", ")}. Be more specific.`,
       );
     }
 
