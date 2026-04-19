@@ -80,10 +80,67 @@ const fetchRepoLanguage = async (url: string): Promise<string | null> => {
   }
 };
 
-const RISK_CLASS: Record<RiskLevel, string> = {
-  high: "text-risk-high",
-  medium: "text-risk-med",
-  low: "text-risk-low",
+type Criticality = "critical" | "significant" | "moderate" | "minor";
+
+const CRIT_META: Record<Criticality, { label: string; color: string; bg: string; border: string; blurb: string }> = {
+  critical: {
+    label: "CRITICAL",
+    color: "text-risk-high",
+    bg: "bg-risk-high/5",
+    border: "border-risk-high/40",
+    blurb: "touches a core symbol with broad reach — expect cascading breakage",
+  },
+  significant: {
+    label: "SIGNIFICANT",
+    color: "text-risk-med",
+    bg: "bg-risk-med/5",
+    border: "border-risk-med/40",
+    blurb: "non-trivial blast radius — review every caller before shipping",
+  },
+  moderate: {
+    label: "MODERATE",
+    color: "text-accent",
+    bg: "bg-accent/5",
+    border: "border-accent/30",
+    blurb: "localized impact — a handful of call sites need a quick look",
+  },
+  minor: {
+    label: "MINOR",
+    color: "text-risk-low",
+    bg: "bg-risk-low/5",
+    border: "border-risk-low/30",
+    blurb: "isolated change — safe to ship with a sanity check",
+  },
+};
+
+/**
+ * Criticality of a described change = function of the target's centrality
+ * (fan_in of the resolved symbol) and the blast radius (how many downstream
+ * symbols are affected, weighted by how shallow they sit in the call graph).
+ */
+const computeCriticality = (
+  affected: AffectedSymbol[],
+  targetFanIn: number,
+): { level: Criticality; reasons: string[] } => {
+  const total = affected.length;
+  // Shallow callers (depth ≤ 2) matter much more than deep transitive ones.
+  const shallow = affected.filter((a) => a.depth <= 2).length;
+  const isCoreTarget = targetFanIn >= 8;
+  const isWidelyUsedTarget = targetFanIn >= 3;
+
+  const reasons: string[] = [];
+  if (isCoreTarget) reasons.push(`target is a core symbol (${targetFanIn} direct callers)`);
+  else if (isWidelyUsedTarget) reasons.push(`target is used by ${targetFanIn} other symbols`);
+  if (total > 0) reasons.push(`${total} downstream symbols affected`);
+  if (shallow > 0) reasons.push(`${shallow} are immediate callers`);
+
+  let level: Criticality;
+  if (isCoreTarget || total >= 25 || shallow >= 8) level = "critical";
+  else if (isWidelyUsedTarget || total >= 10 || shallow >= 3) level = "significant";
+  else if (total >= 3) level = "moderate";
+  else level = "minor";
+
+  return { level, reasons };
 };
 
 const isGitHubUrl = (url: string) => {
@@ -230,13 +287,20 @@ const ImpactRadar = () => {
       <div className="relative mx-auto w-full max-w-[620px]">
         <RadarVisual results={affected.length > 0 ? affected : undefined} />
         <div className="pointer-events-none absolute -bottom-4 left-1/2 -translate-x-1/2 rounded-md border border-border bg-card px-4 py-2.5 font-mono text-xs shadow-paper whitespace-nowrap">
-          {summary ? (
-            <>
-              <span className="text-risk-high">●</span> {summary.high} will break ·{" "}
-              <span className="text-risk-med">●</span> {summary.medium} review ·{" "}
-              <span className="text-risk-low">●</span> {summary.low} safe
-            </>
-          ) : radarState.status === "loading" ? (
+          {radarState.status === "result" ? (() => {
+            const { level } = computeCriticality(
+              radarState.data.affected,
+              (radarState.data as any).resolvedSymbol?.fan_in ?? 0,
+            );
+            const meta = CRIT_META[level];
+            return (
+              <>
+                <span className={meta.color}>●</span>{" "}
+                <span className={`${meta.color} font-semibold`}>{meta.label}</span>{" "}
+                <span className="text-muted-foreground">change · {radarState.data.summary.total} symbols affected</span>
+              </>
+            );
+          })() : radarState.status === "loading" ? (
             <span className="text-muted-foreground animate-pulse">scanning…</span>
           ) : (
             <span className="text-muted-foreground">enter a repo to begin</span>
@@ -351,6 +415,32 @@ const ImpactRadar = () => {
             </span>
           </div>
 
+          {(() => {
+            const { level, reasons } = computeCriticality(
+              radarState.data.affected,
+              (radarState.data as any).resolvedSymbol?.fan_in ?? 0,
+            );
+            const meta = CRIT_META[level];
+            return (
+              <div className={`rounded-md border ${meta.border} ${meta.bg} px-4 py-3 shadow-paper`}>
+                <div className="flex items-center gap-2">
+                  <span className={`font-mono text-[10px] uppercase tracking-widest ${meta.color}`}>
+                    criticality
+                  </span>
+                  <span className={`font-mono text-sm font-semibold tracking-wide ${meta.color}`}>
+                    {meta.label}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-foreground">{meta.blurb}.</p>
+                {reasons.length > 0 && (
+                  <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                    {reasons.join(" · ")}
+                  </p>
+                )}
+              </div>
+            );
+          })()}
+
           <div className="rounded-md border border-border bg-card shadow-paper overflow-hidden">
             <div className="px-4 py-2 border-b border-border text-xs font-mono text-muted-foreground">
               {radarState.data.summary.total} affected symbols
@@ -358,12 +448,6 @@ const ImpactRadar = () => {
             <div className="max-h-52 overflow-y-auto divide-y divide-border">
               {affected.slice(0, 15).map((sym) => (
                 <div key={sym.id} className="flex items-center gap-3 px-4 py-2 text-xs">
-                  <span className={`shrink-0 ${RISK_CLASS[sym.risk]}`}>●</span>
-                  <span
-                    className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${RISK_CLASS[sym.risk]} border-current/30`}
-                  >
-                    {sym.risk === "medium" ? "MED" : sym.risk.toUpperCase()}
-                  </span>
                   <span className="font-mono text-foreground truncate">{sym.name}</span>
                   <span className="text-muted-foreground truncate flex-1 min-w-0">
                     {sym.file_path.split("/").slice(-2).join("/")}
@@ -427,7 +511,7 @@ const ImpactRadar = () => {
                   return (
                     <div key={sym.id} className="px-4 py-3 space-y-1.5">
                       <div className="flex items-center gap-2 text-xs">
-                        <span className={`${RISK_CLASS[sym.risk]}`}>●</span>
+                        <span className="font-mono text-foreground truncate">{sym.name}</span>
                         <span className="font-mono text-foreground truncate">{sym.name}</span>
                         <span className="text-muted-foreground truncate text-[11px]">
                           {sym.file_path.split("/").slice(-2).join("/")}
