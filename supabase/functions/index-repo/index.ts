@@ -559,61 +559,110 @@ Deno.serve(async (req) => {
   );
 
   try {
-    // Support both GitHub push webhook payloads and plain JSON API calls
     let repoUrl: string;
     let branchHint: string | undefined;
+    let ownerId: string | null = null;
+    let githubToken: string | undefined;
     const githubEvent = req.headers.get("X-GitHub-Event");
 
     if (githubEvent === "push") {
+      // Machine-to-machine: HMAC-signed GitHub push webhook.
       const rawBody = await req.text();
-
-      // Verify HMAC-SHA256 signature when WEBHOOK_SECRET is configured
       const webhookSecret = Deno.env.get("WEBHOOK_SECRET");
-      if (webhookSecret) {
-        const sig = req.headers.get("X-Hub-Signature-256") ?? "";
-        const encoder = new TextEncoder();
-        const key = await crypto.subtle.importKey(
-          "raw", encoder.encode(webhookSecret),
-          { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+      if (!webhookSecret) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "WEBHOOK_SECRET not configured" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
-        const mac = await crypto.subtle.sign("HMAC", key, encoder.encode(rawBody));
-        const expected = "sha256=" + Array.from(new Uint8Array(mac))
-          .map((b) => b.toString(16).padStart(2, "0")).join("");
-        if (sig !== expected) {
-          return new Response(
-            JSON.stringify({ ok: false, error: "Invalid webhook signature" }),
-            { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-          );
-        }
+      }
+      const sig = req.headers.get("X-Hub-Signature-256") ?? "";
+      const encoder = new TextEncoder();
+      const key = await crypto.subtle.importKey(
+        "raw", encoder.encode(webhookSecret),
+        { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+      );
+      const mac = await crypto.subtle.sign("HMAC", key, encoder.encode(rawBody));
+      const expected = "sha256=" + Array.from(new Uint8Array(mac))
+        .map((b) => b.toString(16).padStart(2, "0")).join("");
+      if (sig !== expected) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "Invalid webhook signature" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
       }
       const payload = JSON.parse(rawBody);
       repoUrl = payload.repository?.html_url;
       branchHint = (payload.ref ?? "refs/heads/main").replace("refs/heads/", "");
+      ownerId = payload.meridian_user_id ?? null;
       if (!repoUrl) throw new Error("Missing repository.html_url in push payload");
+      if (!ownerId) throw new Error("Webhook payload missing meridian_user_id");
     } else {
+      // Authenticated user path: require valid JWT.
+      const authHeader = req.headers.get("Authorization");
+      if (!authHeader?.startsWith("Bearer ")) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "Unauthorized" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const userClient = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_ANON_KEY")!,
+        { global: { headers: { Authorization: authHeader } } },
+      );
+      const token = authHeader.replace("Bearer ", "");
+      const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
+      if (claimsErr || !claimsData?.claims?.sub) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "Invalid session" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      ownerId = claimsData.claims.sub as string;
+
       const body = await req.json().catch(() => ({}));
-      repoUrl = body.repoUrl ?? "https://github.com/psf/requests";
-      branchHint = body.branch; // undefined → resolved below via GitHub API
+      if (!body.repoUrl) throw new Error("repoUrl is required");
+      repoUrl = body.repoUrl;
+      branchHint = body.branch;
+      githubToken = typeof body.githubToken === "string" && body.githubToken.length > 0
+        ? body.githubToken
+        : undefined;
     }
 
     const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+?)(?:\.git)?(?:\/)?$/);
     if (!match) throw new Error("Invalid GitHub URL");
     const [, owner, name] = match;
 
-    // Resolve default branch from GitHub API when not explicitly provided
-    const branch = branchHint ?? (await resolveDefaultBranch(owner, name, "main"));
+    const branch = branchHint ?? (await resolveDefaultBranch(owner, name, "main", githubToken));
 
-    // Upsert repo row → indexing
-    const { data: repoRow, error: repoErr } = await supabase
+    // Per-owner repo row. Different users each get their own row for the same URL.
+    const { data: existing } = await supabase
       .from("repos")
-      .upsert(
-        { url: repoUrl, owner, name, default_branch: branch, status: "indexing", status_message: "Downloading…" },
-        { onConflict: "url" },
-      )
-      .select()
-      .single();
-    if (repoErr || !repoRow) throw new Error(repoErr?.message || "Failed to create repo row");
-    const repoId = (repoRow as any).id as string;
+      .select("id")
+      .eq("url", repoUrl)
+      .eq("owner_id", ownerId)
+      .maybeSingle();
+
+    let repoId: string;
+    if (existing) {
+      repoId = (existing as any).id;
+      await supabase.from("repos").update({
+        owner, name, default_branch: branch,
+        status: "indexing", status_message: "Downloading…",
+      }).eq("id", repoId);
+    } else {
+      const { data: created, error: createErr } = await supabase
+        .from("repos")
+        .insert({
+          url: repoUrl, owner, name, default_branch: branch,
+          status: "indexing", status_message: "Downloading…",
+          owner_id: ownerId,
+        })
+        .select("id")
+        .single();
+      if (createErr || !created) throw new Error(createErr?.message || "Failed to create repo row");
+      repoId = (created as any).id;
+    }
 
     try {
       // Wipe previous data for this repo
