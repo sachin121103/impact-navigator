@@ -21,6 +21,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { SAMPLE_GRAPH, type GraphPayload } from "@/lib/sample-graph";
 import {
   aggregatePlan,
+  buildForwardAdjacency,
   buildReverseAdjacency,
   buildTestPlan,
   coverageMetrics,
@@ -33,7 +34,9 @@ import {
   indexNodes,
   isTestNode,
   nodesForFiles,
+  proposeTests,
   type TestPlan,
+  type TestProposal,
 } from "@/lib/testpath";
 
 const TestPath = () => {
