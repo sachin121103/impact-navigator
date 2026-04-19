@@ -326,10 +326,17 @@ export const CodeGraphCanvas = ({
       .force(
         "x",
         forceX<SimNode>((d) => {
+          // Orphan file nodes (no edges in either direction) get pulled to a
+          // dedicated lower-right "unconnected" cluster instead of floating
+          // randomly inside their zone — keeps sparse/unsupported repos tidy.
+          if (d.type === "file" && (d.degree ?? 0) === 0) {
+            return size.w - 90;
+          }
           const k = zoneByNodeId.get(d.id);
           return (k && zoneAnchors.get(k)?.cx) ?? size.w / 2;
         }).strength((d) => {
           const deg = d.degree ?? 0;
+          if (d.type === "file" && deg === 0) return physics.centerStrength * 1.2;
           const scale = deg === 0 ? 0.15 : Math.min(1, 0.4 + deg * 0.1);
           return physics.centerStrength * scale;
         }),
@@ -337,10 +344,14 @@ export const CodeGraphCanvas = ({
       .force(
         "y",
         forceY<SimNode>((d) => {
+          if (d.type === "file" && (d.degree ?? 0) === 0) {
+            return size.h - 90;
+          }
           const k = zoneByNodeId.get(d.id);
           return (k && zoneAnchors.get(k)?.cy) ?? size.h / 2;
         }).strength((d) => {
           const deg = d.degree ?? 0;
+          if (d.type === "file" && deg === 0) return physics.centerStrength * 1.2;
           const scale = deg === 0 ? 0.15 : Math.min(1, 0.4 + deg * 0.1);
           return physics.centerStrength * scale;
         }),
