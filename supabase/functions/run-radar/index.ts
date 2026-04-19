@@ -101,8 +101,17 @@ function extractSymbolHints(prompt: string): Hint[] {
     let m: RegExpExecArray | null;
     while ((m = r.exec(prompt)) !== null) add(m[1], true);
   }
-  for (const word of prompt.split(/\W+/)) {
-    if (word.length >= 3 && /^[A-Za-z_]/.test(word)) add(word, false);
+  // Identifier-like words. Promote to "strong" when the prompt is essentially
+  // just identifiers (so a bare "update_game" still works), or when the word
+  // looks like a compound identifier (snake_case / camelCase / kebab-case).
+  const nonStop = prompt
+    .split(/\W+/)
+    .filter((w) => w.length >= 3 && /^[A-Za-z_]/.test(w))
+    .filter((w) => !STOPWORDS.has(w.toLowerCase()));
+  const promptIsMostlyIdentifiers = nonStop.length > 0 && nonStop.length <= 3;
+  for (const word of nonStop) {
+    const looksCompound = /[_\-]/.test(word) || /[a-z][A-Z]/.test(word);
+    add(word, promptIsMostlyIdentifiers || looksCompound);
   }
   return [...seen.values()];
 }
