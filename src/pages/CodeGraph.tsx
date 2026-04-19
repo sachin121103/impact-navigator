@@ -845,6 +845,17 @@ const CodeGraph = () => {
         </div>
       )}
 
+      {/* ── No-churn hint: single-commit / Lovable-cloned repos have flat heatmap ── */}
+      {!isEmpty && !error && meta && (meta.parsed_file_count ?? meta.file_count) >= 3 &&
+        data.nodes.filter(n => n.type === "file").every(n => (n.churn_score ?? 0) === 0) && (
+        <div className="pointer-events-none absolute left-1/2 bottom-4 z-10 -translate-x-1/2 rounded-full border px-3 py-1.5 shadow-paper"
+          style={{ ...GLASS, borderColor: T.border }}>
+          <p className="font-mono text-[10px] tracking-wide" style={{ color: T.muted }}>
+            single-commit repo · heatmap disabled
+          </p>
+        </div>
+      )}
+
       {/* ── Selection drawer ── */}
       {selected && (
         <aside
