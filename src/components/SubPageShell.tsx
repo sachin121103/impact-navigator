@@ -59,7 +59,7 @@ export const SubPageShell = ({
       </header>
 
       {/* Two-column split: visual left, text right */}
-      <div className="grid min-h-screen grid-cols-1 items-start gap-8 px-6 pb-16 pt-24 lg:grid-cols-[1.1fr_440px] lg:gap-12 lg:pl-10 lg:pr-12">
+      <div className="grid grid-cols-1 items-start gap-8 px-6 pb-24 pt-24 lg:grid-cols-[1.1fr_440px] lg:gap-12 lg:pl-10 lg:pr-12">
         {/* Visual column */}
         <div className="relative flex min-h-[55vh] items-start justify-center">
           <div className="w-full max-w-[680px]">{visual}</div>
