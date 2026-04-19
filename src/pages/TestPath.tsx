@@ -151,7 +151,7 @@ const TestPath = () => {
       eyebrow="02 · testpath"
       title="TestPath."
       tagline="Run only what matters."
-      description="Pick a symbol you're about to change. TestPath walks the dependency graph backwards to find every test that exercises a path to it — then ranks them by distance, so you get a runnable plan instead of the full suite."
+      description="Pick a symbol you're about to ship. TestPath reads its place in the dependency graph and proposes the tests you should write — happy paths, edges, integration contracts with each collaborator, and regression smoke tests at every caller."
       visual={
         <div className="grid h-full w-full place-items-center">
           <div className="aspect-square w-[min(82vmin,720px)]">
