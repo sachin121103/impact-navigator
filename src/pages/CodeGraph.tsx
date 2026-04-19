@@ -14,6 +14,11 @@ import { Input } from "@/components/ui/input";
 import { CodeGraphCanvas, type AnalysisMode } from "@/components/CodeGraphCanvas";
 import { SAMPLE_GRAPH, type GraphPayload } from "@/lib/sample-graph";
 import {
+  applyAbstraction,
+  moduleKey,
+  type AbstractionLevel,
+} from "@/lib/graph-layers";
+import {
   computeAllMetrics,
   topN,
   type GraphMetrics,
@@ -88,6 +93,11 @@ const CodeGraph = () => {
   } | null>(null);
   const [hasLoadedRepo, setHasLoadedRepo] = useState(false);
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("none");
+  const [abstractionLevel, setAbstractionLevel] = useState<AbstractionLevel>("module");
+  // focusStack[0] = module key (e.g. "src/api"), focusStack[1] = file id
+  const [focusStack, setFocusStack] = useState<string[]>([]);
+  // Remembers the user's last manually chosen level so search auto-jumping back works.
+  const lastManualLevelRef = useRef<AbstractionLevel>("module");
 
   // Heavy metrics computed off the main thread via Web Worker.
   // Falls back to inline compute if Worker unavailable (e.g. SSR).
@@ -218,20 +228,114 @@ const CodeGraph = () => {
 
   const isEmpty = !hasLoadedRepo;
 
+  // Reset focus stack when the underlying repo changes.
+  useEffect(() => {
+    setFocusStack([]);
+  }, [data]);
+
+  // Searching auto-jumps to the symbol level so all matches are visible;
+  // clearing search restores the user's last manually picked level.
+  useEffect(() => {
+    if (search.trim()) {
+      setAbstractionLevel((prev) => (prev !== "symbol" ? "symbol" : prev));
+    } else {
+      setAbstractionLevel(lastManualLevelRef.current);
+    }
+  }, [search]);
+
+  const handleLevelChange = (lvl: AbstractionLevel) => {
+    lastManualLevelRef.current = lvl;
+    setAbstractionLevel(lvl);
+    if (lvl === "module") setFocusStack([]);
+    else if (lvl === "file") setFocusStack((s) => s.slice(0, 1));
+  };
+
+  // Apply abstraction transform to the full graph before rendering.
+  const displayData = useMemo(
+    () => applyAbstraction(data, abstractionLevel, focusStack),
+    [data, abstractionLevel, focusStack],
+  );
+
+  // Click handler that drills down through abstraction levels.
+  const handleNodeSelect = (id: string | null) => {
+    if (!id) {
+      setSelectedId(null);
+      return;
+    }
+    if (abstractionLevel === "module" && id.startsWith("module:")) {
+      const key = id.slice("module:".length);
+      lastManualLevelRef.current = "file";
+      setFocusStack([key]);
+      setAbstractionLevel("file");
+      return;
+    }
+    if (abstractionLevel === "file") {
+      const node = data.nodes.find((n) => n.id === id);
+      if (node?.type === "file") {
+        lastManualLevelRef.current = "symbol";
+        setFocusStack((prev) => [prev[0] ?? moduleKey(node.file), id]);
+        setAbstractionLevel("symbol");
+        return;
+      }
+    }
+    setSelectedId(id);
+  };
+
   // Precompute top lists for health panel
   const topBetweenness = useMemo(() => topN(metrics.betweenness, 3), [metrics]);
   const topPagerank    = useMemo(() => topN(metrics.pagerank, 3), [metrics]);
 
   const { filled: healthFilled, color: healthColor } = healthDots(metrics.stats.healthScore);
 
+  // Breadcrumb segments derived from focusStack.
+  const crumbs = useMemo(() => {
+    const out: { label: string; onClick: () => void; isLast: boolean }[] = [
+      {
+        label: "All modules",
+        onClick: () => {
+          lastManualLevelRef.current = "module";
+          setFocusStack([]);
+          setAbstractionLevel("module");
+        },
+        isLast: focusStack.length === 0,
+      },
+    ];
+    if (focusStack[0]) {
+      out.push({
+        label: focusStack[0],
+        onClick: () => {
+          lastManualLevelRef.current = "file";
+          setFocusStack([focusStack[0]]);
+          setAbstractionLevel("file");
+        },
+        isLast: focusStack.length === 1,
+      });
+    }
+    if (focusStack[1]) {
+      const fileNode = data.nodes.find((n) => n.id === focusStack[1]);
+      out.push({
+        label: fileNode?.file.split("/").pop() ?? focusStack[1],
+        onClick: () => {},
+        isLast: true,
+      });
+    }
+    return out;
+  }, [focusStack, data.nodes]);
+
+  const LEVELS: { id: AbstractionLevel; label: string }[] = [
+    { id: "module", label: "Modules" },
+    { id: "file",   label: "Files" },
+    { id: "symbol", label: "Symbols" },
+  ];
+
   return (
     <div className="relative h-screen w-full overflow-hidden texture-paper">
       {/* Canvas */}
       <div className={isEmpty ? "absolute inset-0 opacity-30" : "absolute inset-0"}>
         <CodeGraphCanvas
-          data={data}
+          data={displayData}
           selectedId={selectedId}
-          onSelect={setSelectedId}
+          onSelect={handleNodeSelect}
           search={search}
           metrics={metrics}
           analysisMode={analysisMode}
@@ -322,27 +426,78 @@ const CodeGraph = () => {
         </div>
       </header>
 
-      {/* ── Analysis mode toggle ── */}
+      {/* ── Abstraction level + Analysis mode toggles ── */}
       {!isEmpty && (
-        <div className="pointer-events-auto absolute left-1/2 top-[68px] z-20 -translate-x-1/2 flex items-center gap-1 rounded-full border p-1 shadow-paper" style={GLASS}>
-          {MODES.map((m) => {
-            const active = analysisMode === m.id;
-            return (
-              <button
-                key={m.id}
-                onClick={() => setAnalysisMode(m.id)}
-                className="rounded-full px-3 py-1 font-mono text-[10px] transition-all"
-                style={{
-                  background: active ? "rgba(45,170,160,0.12)" : "transparent",
-                  color: active ? T.accent : T.muted,
-                  border: active ? `1px solid rgba(45,170,160,0.35)` : "1px solid transparent",
-                  fontWeight: active ? 600 : 400,
-                }}
-              >
-                {m.label}
-              </button>
-            );
-          })}
+        <div className="pointer-events-auto absolute left-1/2 top-[68px] z-20 -translate-x-1/2 flex flex-col items-center gap-2">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 rounded-full border p-1 shadow-paper" style={GLASS}>
+              {LEVELS.map((l) => {
+                const active = abstractionLevel === l.id;
+                return (
+                  <button
+                    key={l.id}
+                    onClick={() => handleLevelChange(l.id)}
+                    className="rounded-full px-3 py-1 font-mono text-[10px] transition-all"
+                    style={{
+                      background: active ? "rgba(160,138,110,0.18)" : "transparent",
+                      color: active ? T.ink : T.muted,
+                      border: active ? `1px solid ${T.border}` : "1px solid transparent",
+                      fontWeight: active ? 600 : 400,
+                    }}
+                    title={
+                      l.id === "module" ? "High-level folders only"
+                      : l.id === "file" ? "File-to-file imports"
+                      : "Full detail (files, classes, functions)"
+                    }
+                  >
+                    {l.label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-1 rounded-full border p-1 shadow-paper" style={GLASS}>
+              {MODES.map((m) => {
+                const active = analysisMode === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => setAnalysisMode(m.id)}
+                    className="rounded-full px-3 py-1 font-mono text-[10px] transition-all"
+                    style={{
+                      background: active ? "rgba(45,170,160,0.12)" : "transparent",
+                      color: active ? T.accent : T.muted,
+                      border: active ? `1px solid rgba(45,170,160,0.35)` : "1px solid transparent",
+                      fontWeight: active ? 600 : 400,
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {focusStack.length > 0 && (
+            <div className="flex items-center gap-1.5 rounded-full border px-3 py-1 shadow-paper font-mono text-[10px]" style={GLASS}>
+              {crumbs.map((c, i) => (
+                <span key={i} className="flex items-center gap-1.5">
+                  {i > 0 && <span style={{ color: T.dim }}>›</span>}
+                  {c.isLast ? (
+                    <span style={{ color: T.ink, fontWeight: 600 }}>{c.label}</span>
+                  ) : (
+                    <button
+                      onClick={c.onClick}
+                      className="transition-colors"
+                      style={{ color: T.muted }}
+                      onMouseEnter={(e) => (e.currentTarget.style.color = T.accent)}
+                      onMouseLeave={(e) => (e.currentTarget.style.color = T.muted)}
+                    >
+                      {c.label}
+                    </button>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
