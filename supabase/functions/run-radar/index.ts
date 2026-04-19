@@ -64,7 +64,6 @@ const STOPWORDS = new Set([
 ]);
 
 function tokens(id: string): string[] {
-  // snake_case + kebab-case + camelCase → lowercase parts.
   return id
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .split(/[_\-.]/)
@@ -75,7 +74,7 @@ function tokens(id: string): string[] {
 interface Hint {
   raw: string;
   parts: string[];
-  strong: boolean; // true if user clearly targeted this id
+  strong: boolean;
 }
 
 function extractSymbolHints(prompt: string): Hint[] {
@@ -91,11 +90,11 @@ function extractSymbolHints(prompt: string): Hint[] {
   };
 
   const strongPatterns = [
-    /\b(\w+\.\w+(?:\.\w+)*)\s*\(/g,                              // foo.bar(
-    /`([^`\n]+)`/g,                                              // `name`
+    /\b(\w+\.\w+(?:\.\w+)*)\s*\(/g,
+    /`([^`\n]+)`/g,
     /(?:rename|change|delete|modify|update|refactor|remove|fix|add)\s+([A-Za-z_][\w.]*)/gi,
     /([A-Za-z_][\w.]*)\s+(?:function|method|class)/gi,
-    /\b([A-Za-z_][\w.]*)\s*\(\s*\)?/g,                           // bareName(
+    /\b([A-Za-z_][\w.]*)\s*\(\s*\)?/g,
   ];
   for (const re of strongPatterns) {
     const r = new RegExp(re.source, re.flags);
@@ -139,8 +138,6 @@ function scoreSymbol(
     else if (n.includes(lc) || lc.includes(n)) local = 8;
     else if (qn.includes(lc)) local = 4;
 
-    // Component overlap: "draw_pixel" vs "put_pixel" share "pixel" → boost
-    // proportionally to how much of the user's identifier matched.
     if (local <= 8 && h.parts.length > 0) {
       const overlap = h.parts.filter((p) => symParts.has(p)).length;
       if (overlap > 0) {
@@ -152,7 +149,6 @@ function scoreSymbol(
     score += local * weight;
   }
 
-  // Tiny tiebreaker — must not beat fuzzy mismatches.
   if (sym.kind === "function" || sym.kind === "method") score += 0.5;
   else if (sym.kind === "class") score += 0.25;
   return score;
@@ -250,7 +246,6 @@ Deno.serve(async (req) => {
     const top = scored[0];
     const second = scored[1];
 
-    // Real hits land >= 12 (fuzzy component overlap or better).
     if (!top || top.score < 12) {
       const candidates = scored.slice(0, 5).map((s) => s.sym.qualified_name);
       throw new Error(
@@ -259,7 +254,6 @@ Deno.serve(async (req) => {
           : "Could not identify a symbol from the prompt — try including the exact function or method name.",
       );
     }
-    // Ambiguous fuzzy match (no exact/endsWith hit, top two nearly tied).
     if (second && top.score < 22 && top.score - second.score < 4) {
       throw new Error(
         `Ambiguous — multiple symbols match equally well: ${scored
