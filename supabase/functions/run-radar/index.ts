@@ -53,26 +53,59 @@ function riskLevel(fan_in: number, churn: number): RiskLevel {
   return "low";
 }
 
-function extractSymbolHints(prompt: string): string[] {
-  const hints = new Set<string>();
-  const patterns = [
-    /\b(\w+\.\w+(?:\.\w+)*)\s*\(/g,
-    /`([^`\n]+)`/g,
-    /(?:rename|change|delete|modify|update|refactor|remove)\s+([A-Za-z_][\w.]*)/gi,
+// English verbs / generic words from the prompt — never used as fuzzy hints.
+const STOPWORDS = new Set([
+  "rename", "renamed", "change", "changed", "delete", "deleted",
+  "remove", "removed", "modify", "modified", "update", "updated",
+  "refactor", "refactored", "add", "added", "fix", "fixed",
+  "the", "this", "that", "from", "into", "make", "function", "method",
+  "class", "module", "file", "and", "for", "with", "all", "any",
+  "new", "old", "use", "using", "behavior", "logic", "code",
+]);
+
+function tokens(id: string): string[] {
+  // snake_case + kebab-case + camelCase → lowercase parts.
+  return id
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .split(/[_\-.]/)
+    .map((s) => s.toLowerCase())
+    .filter((s) => s.length >= 2);
+}
+
+interface Hint {
+  raw: string;
+  parts: string[];
+  strong: boolean; // true if user clearly targeted this id
+}
+
+function extractSymbolHints(prompt: string): Hint[] {
+  const seen = new Map<string, Hint>();
+  const add = (raw: string, strong: boolean) => {
+    const r = raw.trim();
+    if (!r || r.length < 2) return;
+    const lc = r.toLowerCase();
+    if (STOPWORDS.has(lc)) return;
+    const prev = seen.get(lc);
+    if (prev) prev.strong = prev.strong || strong;
+    else seen.set(lc, { raw: r, parts: tokens(r), strong });
+  };
+
+  const strongPatterns = [
+    /\b(\w+\.\w+(?:\.\w+)*)\s*\(/g,                              // foo.bar(
+    /`([^`\n]+)`/g,                                              // `name`
+    /(?:rename|change|delete|modify|update|refactor|remove|fix|add)\s+([A-Za-z_][\w.]*)/gi,
     /([A-Za-z_][\w.]*)\s+(?:function|method|class)/gi,
+    /\b([A-Za-z_][\w.]*)\s*\(\s*\)?/g,                           // bareName(
   ];
-  for (const re of patterns) {
+  for (const re of strongPatterns) {
     const r = new RegExp(re.source, re.flags);
     let m: RegExpExecArray | null;
-    while ((m = r.exec(prompt)) !== null) {
-      const name = m[1].trim();
-      if (name && name.length > 1) hints.add(name);
-    }
+    while ((m = r.exec(prompt)) !== null) add(m[1], true);
   }
   for (const word of prompt.split(/\W+/)) {
-    if (word.length > 2 && /^[A-Za-z_]/.test(word)) hints.add(word);
+    if (word.length >= 3 && /^[A-Za-z_]/.test(word)) add(word, false);
   }
-  return [...hints];
+  return [...seen.values()];
 }
 
 function classifyChangeKind(prompt: string): string {
@@ -83,20 +116,45 @@ function classifyChangeKind(prompt: string): string {
   return "behavior";
 }
 
-function scoreSymbol(sym: { name: string; qualified_name: string; kind: string }, hints: string[]): number {
+function scoreSymbol(
+  sym: { name: string; qualified_name: string; kind: string },
+  hints: Hint[],
+): number {
+  if (hints.length === 0) return 0;
+  const n = sym.name.toLowerCase();
+  const qn = sym.qualified_name.toLowerCase();
+  const symParts = new Set(tokens(sym.name));
   let score = 0;
-  for (const hint of hints) {
-    const h = hint.toLowerCase();
-    const n = sym.name.toLowerCase();
-    const qn = sym.qualified_name.toLowerCase();
-    if (qn === h || qn.endsWith(`.${h}`)) score += 10;
-    else if (n === h) score += 8;
-    else if (qn.endsWith(`.${h.split(".").pop()!}`)) score += 6;
-    else if (n.includes(h) || h.includes(n)) score += 4;
-    else if (qn.includes(h)) score += 2;
+
+  for (const h of hints) {
+    const lc = h.raw.toLowerCase();
+    const lastDot = lc.split(".").pop()!;
+    const weight = h.strong ? 1 : 0.35;
+
+    let local = 0;
+    if (qn === lc || qn.endsWith(`.${lc}`) || qn.endsWith(`::${lc}`)) local = 30;
+    else if (n === lc) local = 26;
+    else if (n === lastDot) local = 22;
+    else if (qn.endsWith(`.${lastDot}`) || qn.endsWith(`::${lastDot}`)) local = 18;
+    else if (n.includes(lc) || lc.includes(n)) local = 8;
+    else if (qn.includes(lc)) local = 4;
+
+    // Component overlap: "draw_pixel" vs "put_pixel" share "pixel" → boost
+    // proportionally to how much of the user's identifier matched.
+    if (local <= 8 && h.parts.length > 0) {
+      const overlap = h.parts.filter((p) => symParts.has(p)).length;
+      if (overlap > 0) {
+        const coverage = overlap / h.parts.length;
+        local += 6 * overlap + Math.round(4 * coverage);
+      }
+    }
+
+    score += local * weight;
   }
-  if (sym.kind === "function" || sym.kind === "method") score += 2;
-  else if (sym.kind === "class") score += 1;
+
+  // Tiny tiebreaker — must not beat fuzzy mismatches.
+  if (sym.kind === "function" || sym.kind === "method") score += 0.5;
+  else if (sym.kind === "class") score += 0.25;
   return score;
 }
 
