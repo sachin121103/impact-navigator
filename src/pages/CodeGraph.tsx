@@ -375,6 +375,14 @@ const CodeGraph = () => {
           search={search}
           metrics={metrics}
           analysisMode={analysisMode}
+          hiddenByFile={hiddenByFile}
+          onExpandFile={(fileId) => {
+            const node = data.nodes.find((n) => n.id === fileId);
+            if (!node) return;
+            lastManualLevelRef.current = "symbol";
+            setFocusStack((prev) => [prev[0] ?? moduleKey(node.file), fileId]);
+            setAbstractionLevel("symbol");
+          }}
         />
       </div>
 
