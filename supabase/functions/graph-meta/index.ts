@@ -102,10 +102,17 @@ function shouldSkip(rel: string): boolean {
   if (parts.slice(0, -1).some(
     (p) => SKIP_DIRS.has(p) || (p.startsWith(".") && p.length > 1),
   )) return true;
+  for (const pref of SKIP_PATH_PREFIXES) {
+    if (rel.startsWith(pref)) return true;
+  }
+  if (SKIP_FILES.has(rel)) return true;
   const base = parts[parts.length - 1];
   // Skip TS declaration files and tests
   if (base.endsWith(".d.ts")) return true;
   if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/i.test(base)) return true;
+  // Skip top-level config files like vite.config.ts, tailwind.config.ts, etc.
+  if (/\.config\.(ts|js|mjs|cjs)$/i.test(base)) return true;
+  if (/^(postcss|tailwind|vite|eslint|next|nuxt|svelte|astro|rollup|webpack|babel|jest|vitest|playwright)\.config\.(ts|js|mjs|cjs)$/i.test(base)) return true;
   return false;
 }
 
