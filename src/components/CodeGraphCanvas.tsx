@@ -1060,16 +1060,23 @@ export const CodeGraphCanvas = ({
                         style={{ animation: "radar-pulse 2s ease-out infinite" }}
                       />
                     )}
-                    {/* PageRank top-10% outer pulse ring */}
+                    {/* PageRank top influencers — soft glow + pulse for the very top decile */}
                     {isTopPR && !isActive && showAnimatedRings && (
-                      <circle
-                        r={r + 14}
-                        fill="none"
-                        stroke="hsl(25,85%,42%)"
-                        strokeWidth={1}
-                        opacity={0.3}
-                        style={{ animation: "radar-pulse 2.8s ease-out infinite" }}
-                      />
+                      <>
+                        <circle
+                          r={r + 8}
+                          fill="hsl(25,85%,42%)"
+                          opacity={isVeryTopPR ? 0.18 : 0.1}
+                        />
+                        <circle
+                          r={r + 14}
+                          fill="none"
+                          stroke="hsl(25,85%,42%)"
+                          strokeWidth={isVeryTopPR ? 1.4 : 1}
+                          opacity={isVeryTopPR ? 0.5 : 0.3}
+                          style={{ animation: "radar-pulse 2.8s ease-out infinite" }}
+                        />
+                      </>
                     )}
                     {/* Cycle ring — red dashed, always visible */}
                     {isCyclic && !isActive && showAnimatedRings && (
