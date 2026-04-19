@@ -374,6 +374,94 @@ const TestPath = () => {
 };
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
+const ProposalsResult = ({
+  proposals,
+  modifiedLabel,
+  onClear,
+  onCopyJson,
+}: {
+  proposals: TestProposal[];
+  modifiedLabel: string;
+  onClear: () => void;
+  onCopyJson: () => void;
+}) => {
+  const groups = useMemo(() => {
+    const g: Record<"high" | "medium" | "low", TestProposal[]> = {
+      high: [], medium: [], low: [],
+    };
+    for (const p of proposals) g[p.priority].push(p);
+    return g;
+  }, [proposals]);
+
+  return (
+    <div className="space-y-3 rounded-md border border-border/60 bg-background/40 p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-accent">target</p>
+          <p className="truncate font-display text-sm font-semibold">{modifiedLabel}</p>
+        </div>
+        <Button size="sm" variant="ghost" onClick={onClear} className="h-7 px-2 text-[11px]">
+          clear
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <Stat label="proposed" value={proposals.length} tone="accent" />
+        <Stat label="unit" value={proposals.filter((p) => p.kind === "unit").length} />
+        <Stat label="integration" value={proposals.filter((p) => p.kind === "integration").length} />
+      </div>
+
+      {proposals.length === 0 ? (
+        <p className="rounded border border-dashed border-border/60 px-3 py-4 text-center text-xs text-muted-foreground">
+          Nothing to propose.
+        </p>
+      ) : (
+        <div className="max-h-[280px] space-y-3 overflow-auto">
+          {(["high", "medium", "low"] as const).map((p) =>
+            groups[p].length === 0 ? null : (
+              <div key={p}>
+                <div className="mb-1 flex items-center gap-2 px-1">
+                  <Sparkles className="h-3 w-3 text-accent" />
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                    {p} priority · {groups[p].length}
+                  </span>
+                </div>
+                <ul className="space-y-1.5">
+                  {groups[p].map((pr) => (
+                    <li
+                      key={pr.id}
+                      className="space-y-1 rounded border border-border/40 bg-background/50 px-2.5 py-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate font-mono text-[11px]">{pr.suggested_name}</p>
+                        <Badge variant="secondary" className="shrink-0 font-mono text-[9px]">
+                          {pr.kind}
+                        </Badge>
+                      </div>
+                      <p className="truncate font-mono text-[10px] text-muted-foreground">
+                        {pr.suggested_file}
+                      </p>
+                      <p className="text-[11px] leading-snug text-muted-foreground">
+                        {pr.rationale}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ),
+          )}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <Button size="sm" variant="outline" className="flex-1 gap-1.5" onClick={onCopyJson} disabled={!proposals.length}>
+          <Copy className="h-3 w-3" /> JSON
+        </Button>
+      </div>
+    </div>
+  );
+};
+
 const PlanResult = ({
   plan,
   modifiedLabel,
