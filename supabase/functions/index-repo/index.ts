@@ -442,19 +442,46 @@ const isPython = (p: string) => p.endsWith(".py");
 const isCFamily = (p: string) => /\.(c|h|cpp|cc|cxx|hpp|hh|hxx)$/i.test(p);
 const isJsFamily = (p: string) => /\.(ts|tsx|js|jsx|mjs|cjs)$/i.test(p) && !p.endsWith(".d.ts");
 
-async function fetchTarball(owner: string, repo: string, branch: string): Promise<Uint8Array> {
+// Files we must never index — credentials, keys, lock noise that could
+// leak proprietary info as symbol nodes.
+const SECRET_FILE_RE = /(?:^|\/)(\.env(\..*)?|.*\.pem|.*\.key|id_rsa.*|.*\.p12|.*\.pfx|secrets?(\..*)?|credentials?(\..*)?|.*\.crt|.*\.cer)$/i;
+const SECRET_DIR_RE = /(?:^|\/)(node_modules|vendor|\.git|dist|build|\.next|\.cache|coverage|__pycache__)\//i;
+const MAX_FILE_BYTES = 1_000_000;
+
+function isSecretOrIgnored(path: string): boolean {
+  if (SECRET_DIR_RE.test(path)) return true;
+  if (SECRET_FILE_RE.test(path)) return true;
+  return false;
+}
+
+async function fetchTarball(
+  owner: string,
+  repo: string,
+  branch: string,
+  githubToken?: string,
+): Promise<Uint8Array> {
   const url = `https://codeload.github.com/${owner}/${repo}/tar.gz/refs/heads/${branch}`;
-  const res = await fetch(url, { headers: { "User-Agent": "impact-radar-indexer" } });
+  const headers: Record<string, string> = { "User-Agent": "impact-radar-indexer" };
+  if (githubToken) headers["Authorization"] = `token ${githubToken}`;
+  const res = await fetch(url, { headers });
   if (!res.ok) throw new Error(`Failed to download tarball (${branch}): ${res.status}`);
   const buf = new Uint8Array(await res.arrayBuffer());
   return new Uint8Array(gunzipSync(Buffer.from(buf)));
 }
 
-async function resolveDefaultBranch(owner: string, repo: string, fallback: string): Promise<string> {
+async function resolveDefaultBranch(
+  owner: string,
+  repo: string,
+  fallback: string,
+  githubToken?: string,
+): Promise<string> {
   try {
-    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
-      headers: { "User-Agent": "impact-radar-indexer", Accept: "application/vnd.github+json" },
-    });
+    const headers: Record<string, string> = {
+      "User-Agent": "impact-radar-indexer",
+      Accept: "application/vnd.github+json",
+    };
+    if (githubToken) headers["Authorization"] = `token ${githubToken}`;
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers });
     if (!res.ok) return fallback;
     const j = await res.json();
     return j.default_branch || fallback;
@@ -475,18 +502,18 @@ async function* walkSourceFiles(tarBytes: Uint8Array) {
 
   extract.on("entry", (header: any, stream: any, next: any) => {
     const chunks: Buffer[] = [];
-    stream.on("data", (c: Buffer) => chunks.push(c));
+    let size = 0;
+    stream.on("data", (c: Buffer) => { chunks.push(c); size += c.length; });
     stream.on("end", () => {
       const path: string = header.name;
       if (
         header.type === "file" &&
+        size <= MAX_FILE_BYTES &&
+        !isSecretOrIgnored(path) &&
         (isPython(path) || isCFamily(path) || isJsFamily(path)) &&
         !path.includes("/tests/") &&
         !path.includes("/test_") &&
         !path.includes("/__tests__/") &&
-        !path.includes("/node_modules/") &&
-        !path.includes("/dist/") &&
-        !path.includes("/build/") &&
         !/\.(test|spec)\.(ts|tsx|js|jsx)$/i.test(path) &&
         !path.includes("/.")
       ) {
