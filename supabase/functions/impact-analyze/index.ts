@@ -304,7 +304,7 @@ Deno.serve(async (req) => {
   const duration_ms = Date.now() - t0;
 
   // 6. Persist (best-effort)
-  supabase
+  adminClient
     .from("impact_runs")
     .insert({
       repo_id: repo.id,
