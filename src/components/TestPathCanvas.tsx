@@ -193,7 +193,7 @@ export const TestPathCanvas = ({
 };
 
 const NodeMark = ({
-  node, x, y, isTest, isCovering, isSelected, isUntested, dim, onClick,
+  node, x, y, isTest, isCovering, isSelected, isNeighbor, isUntested, isCovered, mode, dim, onClick,
 }: {
   node: GraphNode;
   x: number;
@@ -201,17 +201,50 @@ const NodeMark = ({
   isTest: boolean;
   isCovering: boolean;
   isSelected: boolean;
+  isNeighbor: boolean;
   isUntested: boolean;
+  isCovered: boolean;
+  mode: "default" | "coverage";
   dim: boolean;
   onClick: () => void;
 }) => {
   const r = node.type === "file" ? 6 : 4;
   const opacity = dim ? 0.18 : 1;
+  // In coverage mode, tint covered nodes with accent and untested with destructive.
+  const coverageTint =
+    mode === "coverage"
+      ? isCovered
+        ? "hsl(var(--accent))"
+        : isUntested
+        ? "hsl(var(--destructive))"
+        : null
+      : null;
   const fill = isSelected
     ? "hsl(var(--accent))"
+    : coverageTint
+    ? coverageTint
     : isTest
     ? "hsl(var(--accent))"
     : "hsl(var(--foreground))";
+
+  const label =
+    node.type === "file"
+      ? (node.file.split("/").pop() ?? node.name)
+      : node.name.replace(/.*::/, "");
+  const truncated = label.length > 22 ? label.slice(0, 22) + "…" : label;
+
+  // Emphasize labels for the selected node and its direct neighbors.
+  const emphasized = isSelected || isNeighbor;
+  const labelOpacity = emphasized
+    ? 1
+    : isCovering
+    ? 0.9
+    : dim
+    ? 0
+    : 0.6;
+  const labelSize = emphasized ? 11 : 9;
+  const labelWeight = emphasized ? 600 : 400;
+
   return (
     <g
       transform={`translate(${x},${y})`}
@@ -219,37 +252,48 @@ const NodeMark = ({
       opacity={opacity}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
     >
-      {isUntested && (
+      {isUntested && mode !== "coverage" && (
         <circle r={r + 3} fill="none" stroke="hsl(var(--destructive))" strokeWidth={0.8} opacity={0.55} strokeDasharray="2 2" />
+      )}
+      {mode === "coverage" && isCovered && !isSelected && (
+        <circle r={r + 5} fill="hsl(var(--accent))" opacity={0.12} />
       )}
       {isCovering && !isSelected && (
         <circle r={r + 4} fill="none" stroke="hsl(var(--accent))" strokeWidth={1} opacity={0.5} />
       )}
-      {node.type === "file" || isTest ? (
+      {isNeighbor && !isSelected && (
+        <circle r={r + 3} fill="none" stroke="hsl(var(--accent))" strokeWidth={1.2} opacity={0.85} />
+      )}
+      {node.type === "file" ? (
         <rect x={-r} y={-r} width={r * 2} height={r * 2} fill={fill} />
       ) : (
         <circle r={r} fill={fill} />
       )}
-      {(() => {
-        const label =
-          node.type === "file"
-            ? (node.file.split("/").pop() ?? node.name)
-            : node.name.replace(/.*::/, "");
-        const truncated = label.length > 22 ? label.slice(0, 22) + "…" : label;
-        return (
-          <text
-            x={r + 4}
-            y={3}
-            fontFamily="ui-monospace, monospace"
-            fontSize={9}
-            fill="hsl(var(--foreground))"
-            opacity={isSelected || isCovering ? 0.9 : dim ? 0 : 0.6}
-            style={{ pointerEvents: "none" }}
-          >
-            {truncated}
-          </text>
-        );
-      })()}
+      {/* Label background for emphasized labels so they're readable above edges. */}
+      {emphasized && (
+        <rect
+          x={r + 2}
+          y={-7}
+          width={truncated.length * (labelSize * 0.6) + 6}
+          height={labelSize + 4}
+          fill="hsl(var(--background))"
+          opacity={0.85}
+          rx={2}
+          style={{ pointerEvents: "none" }}
+        />
+      )}
+      <text
+        x={r + 5}
+        y={3}
+        fontFamily="ui-monospace, monospace"
+        fontSize={labelSize}
+        fontWeight={labelWeight}
+        fill={isSelected ? "hsl(var(--accent))" : "hsl(var(--foreground))"}
+        opacity={labelOpacity}
+        style={{ pointerEvents: "none" }}
+      >
+        {truncated}
+      </text>
     </g>
   );
 };
