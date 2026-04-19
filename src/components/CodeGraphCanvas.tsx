@@ -535,6 +535,14 @@ export const CodeGraphCanvas = ({
 
   const finalHighlight = searchMatches ?? highlight;
 
+  // Push current highlight set into the ref so the tick loop can rebuild the
+  // overlay path. Also wake the sim so an immediate tick repaints the overlay.
+  useEffect(() => {
+    highlightRef.current = finalHighlight;
+    const sim = simRef.current as unknown as { __restart?: () => void } | null;
+    sim?.__restart?.();
+  }, [finalHighlight]);
+
   // Top-N most-connected nodes per zone get persistent labels
   const importantIds = useMemo(() => {
     const set = new Set<string>();
