@@ -1245,6 +1245,64 @@ export const CodeGraphCanvas = ({
             })()}
           </g>
 
+          {/* "+N more" chips for files with collapsed low-signal symbols */}
+          {hiddenByFile && hiddenByFile.size > 0 && (
+            <g>
+              {nodes
+                .filter((n) => n.type === "file" && (hiddenByFile.get(n.id)?.length ?? 0) > 0)
+                .map((n) => {
+                  const count = hiddenByFile.get(n.id)!.length;
+                  const r = analysisRadius(n, analysisMode, metrics);
+                  const text = `+${count}`;
+                  const w = text.length * 6 + 10;
+                  return (
+                    <g
+                      key={`expand-${n.id}`}
+                      ref={(el) => {
+                        // Reuse labelRefs map slot so the per-tick translate
+                        // applied to labels also moves this chip with the file.
+                        const k = `__chip__${n.id}`;
+                        if (el) labelRefs.current.set(k, el as SVGGElement);
+                        else labelRefs.current.delete(k);
+                      }}
+                      transform={`translate(${n.x ?? 0},${n.y ?? 0})`}
+                      style={{ cursor: "pointer" }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onExpandFile?.(n.id);
+                      }}
+                    >
+                      <rect
+                        x={-w / 2}
+                        y={r + 4}
+                        width={w}
+                        height={12}
+                        rx={6}
+                        ry={6}
+                        fill={PAPER_BG}
+                        fillOpacity={0.95}
+                        stroke="hsl(184,68%,34%)"
+                        strokeOpacity={0.45}
+                        strokeWidth={0.8}
+                      />
+                      <text
+                        x={0}
+                        y={r + 12.5}
+                        textAnchor="middle"
+                        fontSize={8}
+                        fontFamily="var(--font-mono)"
+                        fontWeight={600}
+                        fill="hsl(184,68%,30%)"
+                        style={{ userSelect: "none", pointerEvents: "none" }}
+                      >
+                        {text}
+                      </text>
+                    </g>
+                  );
+                })}
+            </g>
+          )}
+
         </g>
       </svg>
 
