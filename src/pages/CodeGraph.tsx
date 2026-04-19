@@ -19,6 +19,7 @@ import {
   type GraphMetrics,
 } from "@/lib/graph-metrics";
 import type { WorkerResponse } from "@/lib/metrics.worker";
+import { supabase } from "@/integrations/supabase/client";
 
 // ─── Shared styles ────────────────────────────────────────────────────────────
 const GLASS: React.CSSProperties = {
@@ -72,6 +73,8 @@ const CodeGraph = () => {
   const [data, setData] = useState<GraphPayload>(SAMPLE_GRAPH);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [repoInput, setRepoInput] = useState("");
+  const [githubToken, setGithubToken] = useState("");
+  const [showTokenField, setShowTokenField] = useState(false);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
