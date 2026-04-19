@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
-import { ArrowLeft, Compass } from "lucide-react";
+import { ArrowLeft, Compass, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/hooks/useAuth";
 
 export const SubPageShell = ({
   eyebrow,
@@ -19,6 +20,7 @@ export const SubPageShell = ({
   panel: React.ReactNode;
   legend?: React.ReactNode;
 }) => {
+  const { user, signOut } = useAuth();
   return (
     <div className="relative min-h-screen w-full overflow-hidden texture-paper">
       {/* Floating top bar */}
@@ -37,11 +39,23 @@ export const SubPageShell = ({
           </span>
         </div>
 
-        <Button variant="ghost" size="sm" asChild className="pointer-events-auto rounded-full bg-card/70 backdrop-blur">
-          <Link to="/" className="gap-1.5">
-            <ArrowLeft className="h-3.5 w-3.5" /> Back
-          </Link>
-        </Button>
+        <div className="pointer-events-auto flex items-center gap-2">
+          {user && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => signOut()}
+              className="rounded-full bg-card/70 backdrop-blur gap-1.5"
+            >
+              <LogOut className="h-3.5 w-3.5" /> Sign out
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" asChild className="rounded-full bg-card/70 backdrop-blur">
+            <Link to="/" className="gap-1.5">
+              <ArrowLeft className="h-3.5 w-3.5" /> Back
+            </Link>
+          </Button>
+        </div>
       </header>
 
       {/* Two-column split: visual left, text right */}
