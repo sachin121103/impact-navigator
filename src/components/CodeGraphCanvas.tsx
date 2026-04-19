@@ -997,8 +997,6 @@ export const CodeGraphCanvas = ({
                       e.stopPropagation();
                       onSelect(n.id === selectedId ? null : n.id);
                     }}
-                    onMouseEnter={() => setHoveredId(n.id)}
-                    onMouseLeave={() => setHoveredId(null)}
                     onMouseDown={(e) => {
                       const sim = simRef.current;
                       if (!sim || !svgRef.current) return;
