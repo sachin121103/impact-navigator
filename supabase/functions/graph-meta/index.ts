@@ -66,6 +66,20 @@ const SKIP_DIRS = new Set([
   "dist", "build", ".next", ".nuxt", ".turbo", ".cache",
   "out", "coverage", "__tests__", "__mocks__",
 ]);
+// Path-prefix skips for generated/boilerplate Lovable/shadcn folders that
+// drown out real app structure with disconnected nodes.
+const SKIP_PATH_PREFIXES = [
+  "src/components/ui/",
+  "src/integrations/",
+  "supabase/",
+];
+// Specific files inside otherwise-kept folders that are pure wrappers/noise.
+const SKIP_FILES = new Set([
+  "src/hooks/use-toast.ts",
+  "src/hooks/use-toast.tsx",
+  "src/hooks/use-mobile.tsx",
+  "src/hooks/use-mobile.ts",
+]);
 const KEEP_EXT = new Set([
   ".py", ".ipynb",
   ".c", ".h", ".cpp", ".hpp", ".cc",
@@ -88,10 +102,17 @@ function shouldSkip(rel: string): boolean {
   if (parts.slice(0, -1).some(
     (p) => SKIP_DIRS.has(p) || (p.startsWith(".") && p.length > 1),
   )) return true;
+  for (const pref of SKIP_PATH_PREFIXES) {
+    if (rel.startsWith(pref)) return true;
+  }
+  if (SKIP_FILES.has(rel)) return true;
   const base = parts[parts.length - 1];
   // Skip TS declaration files and tests
   if (base.endsWith(".d.ts")) return true;
   if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/i.test(base)) return true;
+  // Skip top-level config files like vite.config.ts, tailwind.config.ts, etc.
+  if (/\.config\.(ts|js|mjs|cjs)$/i.test(base)) return true;
+  if (/^(postcss|tailwind|vite|eslint|next|nuxt|svelte|astro|rollup|webpack|babel|jest|vitest|playwright)\.config\.(ts|js|mjs|cjs)$/i.test(base)) return true;
   return false;
 }
 
@@ -767,8 +788,20 @@ const JS_RESERVED = new Set([
   "from", "as", "true", "false", "null", "undefined", "this", "super",
   "console", "require", "Promise", "Array", "Object", "String", "Number",
   "Boolean", "Math", "JSON", "Date", "Error", "Set", "Map", "RegExp",
+  "WeakMap", "WeakSet", "Symbol",
   "parseInt", "parseFloat", "isNaN", "isFinite", "setTimeout", "setInterval",
-  "clearTimeout", "clearInterval", "fetch", "Symbol",
+  "clearTimeout", "clearInterval", "fetch",
+  // React hooks & primitives
+  "useState", "useEffect", "useMemo", "useCallback", "useRef", "useContext",
+  "useReducer", "useLayoutEffect", "useImperativeHandle", "useId",
+  "useTransition", "useDeferredValue", "useSyncExternalStore",
+  "forwardRef", "memo", "lazy", "Suspense", "Fragment", "createContext",
+  "createElement", "cloneElement", "isValidElement",
+  // Common UI / util helpers
+  "cn", "clsx", "twMerge", "cva", "tw", "z",
+  // Common router/data hooks
+  "useNavigate", "useLocation", "useParams", "useSearchParams",
+  "useToast", "useQuery", "useMutation", "useQueryClient",
 ]);
 
 function stripJsNoise(src: string): string {
@@ -836,7 +869,22 @@ interface JsParsed {
   classes: string[];
   imports: string[];
   calls: [string, string][];
+  // Map from local-binding name → import spec (e.g. "Button" → "@/components/ui/button").
+  // Used downstream to resolve callees/JSX components to the file that defined them
+  // instead of guessing by bare name across the whole repo.
+  bindings: Record<string, string>;
 }
+
+// Lowercase HTML tags we should NOT treat as React component references.
+const JSX_HTML_TAGS = new Set([
+  "div", "span", "a", "p", "h1", "h2", "h3", "h4", "h5", "h6",
+  "ul", "ol", "li", "img", "input", "button", "form", "label",
+  "section", "article", "header", "footer", "nav", "main", "aside",
+  "table", "thead", "tbody", "tr", "td", "th", "br", "hr",
+  "svg", "path", "circle", "rect", "line", "g", "text", "defs",
+  "select", "option", "textarea", "iframe", "video", "audio",
+  "canvas", "code", "pre", "strong", "em", "small", "b", "i",
+]);
 
 const JS_CALL_RE = /\b([A-Za-z_$][\w$]*)\s*\(/g;
 
@@ -854,13 +902,46 @@ function matchBrace(s: string, openIdx: number): number {
 
 function parseJs(rawSrc: string): JsParsed {
   const src = stripJsNoise(rawSrc);
-  const out: JsParsed = { functions: [], classes: [], imports: [], calls: [] };
+  const out: JsParsed = { functions: [], classes: [], imports: [], calls: [], bindings: {} };
 
-  const reImpFrom = /\bimport\b[^;'"`]*?\bfrom\s*['"]([^'"]+)['"]/g;
+  // Parse `import ... from '...'` with binding extraction so we can map
+  // local names → source spec (for accurate cross-file edge resolution).
+  const reImpFromFull = /\bimport\s+(?:type\s+)?([\s\S]*?)\s+from\s*['"]([^'"]+)['"]/g;
   const reImpBare = /(?:^|[\n;])\s*import\s*['"]([^'"]+)['"]/g;
   const reImpDyn = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
   const reReq = /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
-  for (const re of [reImpFrom, reImpBare, reImpDyn, reReq]) {
+
+  {
+    let m: RegExpExecArray | null;
+    while ((m = reImpFromFull.exec(src)) !== null) {
+      const clause = m[1].trim();
+      const spec = m[2];
+      out.imports.push(spec);
+      // Default import: `Foo` or `Foo, { ... }`
+      const defMatch = clause.match(/^([A-Za-z_$][\w$]*)/);
+      if (defMatch && !clause.startsWith("{") && !clause.startsWith("*")) {
+        out.bindings[defMatch[1]] = spec;
+      }
+      // Namespace: `* as Ns`
+      const nsMatch = clause.match(/\*\s+as\s+([A-Za-z_$][\w$]*)/);
+      if (nsMatch) out.bindings[nsMatch[1]] = spec;
+      // Named: `{ A, B as C }`
+      const braceMatch = clause.match(/\{([^}]*)\}/);
+      if (braceMatch) {
+        for (const part of braceMatch[1].split(",")) {
+          const trimmed = part.trim().replace(/^type\s+/, "");
+          if (!trimmed) continue;
+          const asMatch = trimmed.match(/^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/);
+          if (asMatch) out.bindings[asMatch[2]] = spec;
+          else {
+            const nameMatch = trimmed.match(/^([A-Za-z_$][\w$]*)$/);
+            if (nameMatch) out.bindings[nameMatch[1]] = spec;
+          }
+        }
+      }
+    }
+  }
+  for (const re of [reImpBare, reImpDyn, reReq]) {
     let m: RegExpExecArray | null;
     while ((m = re.exec(src)) !== null) out.imports.push(m[1]);
   }
@@ -925,6 +1006,7 @@ function parseJs(rawSrc: string): JsParsed {
   for (const d of decls) out.functions.push(d.qname);
 
   // Attribute calls to innermost containing decl
+  const reJsx = /<([A-Z][A-Za-z0-9_]*)/g;
   for (const d of decls) {
     const re = new RegExp(JS_CALL_RE.source, "g");
     re.lastIndex = d.bodyStart + 1;
@@ -944,6 +1026,33 @@ function parseJs(rawSrc: string): JsParsed {
       }
       if (innermost === d) out.calls.push([d.qname, callee]);
     }
+
+    // JSX component usage inside this decl → treat as a call edge.
+    // <Capitalized... is a React component reference; lowercase tags are HTML.
+    const jr = new RegExp(reJsx.source, "g");
+    jr.lastIndex = d.bodyStart + 1;
+    const seen = new Set<string>();
+    let jm: RegExpExecArray | null;
+    while ((jm = jr.exec(src)) !== null) {
+      if (jm.index >= d.bodyEnd) break;
+      const comp = jm[1];
+      if (JSX_HTML_TAGS.has(comp.toLowerCase()) && comp[0] !== comp[0].toUpperCase()) continue;
+      if (JS_RESERVED.has(comp)) continue;
+      // Innermost-decl check
+      let innermost = d;
+      for (const e of decls) {
+        if (e === d) continue;
+        if (e.bodyStart > d.bodyStart && e.bodyEnd <= d.bodyEnd &&
+            e.bodyStart <= jm.index && jm.index < e.bodyEnd) {
+          if (e.bodyStart > innermost.bodyStart) innermost = e;
+        }
+      }
+      if (innermost !== d) continue;
+      const key = `${d.qname}→${comp}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.calls.push([d.qname, comp]);
+    }
   }
 
   return out;
@@ -954,6 +1063,23 @@ function resolveJsImport(
   spec: string,
   allFiles: Set<string>,
 ): string | null {
+  const exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+
+  const tryBase = (base: string): string | null => {
+    if (allFiles.has(base)) return base;
+    for (const ext of exts) if (allFiles.has(base + ext)) return base + ext;
+    for (const ext of exts) {
+      const c = `${base}/index${ext}`;
+      if (allFiles.has(c)) return c;
+    }
+    return null;
+  };
+
+  // Path aliases: "@/foo/bar" → src/foo/bar, fall back to project-root.
+  if (spec.startsWith("@/") || spec.startsWith("~/")) {
+    const rest = spec.slice(2);
+    return tryBase(`src/${rest}`) ?? tryBase(rest);
+  }
   if (!spec.startsWith(".")) return null;
   const dir = importerPath.split("/").slice(0, -1).join("/");
   const segs = (dir ? dir.split("/") : []).concat(spec.split("/"));
@@ -963,17 +1089,7 @@ function resolveJsImport(
     if (s === "..") { stack.pop(); continue; }
     stack.push(s);
   }
-  const base = stack.join("/");
-  const exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
-  if (allFiles.has(base)) return base;
-  for (const ext of exts) {
-    if (allFiles.has(base + ext)) return base + ext;
-  }
-  for (const ext of exts) {
-    const candidate = `${base}/index${ext}`;
-    if (allFiles.has(candidate)) return candidate;
-  }
-  return null;
+  return tryBase(stack.join("/"));
 }
 
 // ---------- Build graph ----------------------------------------------------
@@ -998,6 +1114,13 @@ function buildGraph(files: { path: string; content: string }[]): {
 
   const fnIndex: Record<string, string> = {};
   const pendingCalls: [string, string][] = [];
+  // For JS/TS we resolve callees through the importing file's own binding map
+  // (local name → import spec → resolved file → that file's symbol).
+  // Falls back to global fnIndex only when the name isn't imported anywhere.
+  const pendingJsCalls: { callerId: string; callerFile: string; callee: string }[] = [];
+  const jsBindings: Map<string, Record<string, string>> = new Map();
+  // file path → { symbolName → nodeId } so we can pin a callee to a specific file.
+  const fnByFile: Map<string, Record<string, string>> = new Map();
   // Class/module → file indexes for cross-file import resolution.
   const javaClassIdx = buildJavaClassIndex(files);
   const goPkgIdx = buildGoPackageIndex(files);
@@ -1100,6 +1223,7 @@ function buildGraph(files: { path: string; content: string }[]): {
       ext === ".jsx" || ext === ".mjs" || ext === ".cjs"
     ) {
       const p = parseJs(f.content);
+      const fileSyms: Record<string, string> = {};
       for (const qn of p.functions) {
         const id = `${f.path}::${qn}`;
         if (!nodes.some((n) => n.id === id)) {
@@ -1108,13 +1232,20 @@ function buildGraph(files: { path: string; content: string }[]): {
         fnIndex[qn] = id;
         const bare = qn.split(".").pop()!;
         if (!(bare in fnIndex)) fnIndex[bare] = id;
+        fileSyms[qn] = id;
+        fileSyms[bare] = id;
       }
       for (const cls of p.classes) {
         const id = `${f.path}::${cls}`;
         if (!nodes.some((n) => n.id === id)) {
           nodes.push({ id, type: "class", file: f.path, name: cls });
         }
+        fileSyms[cls] = id;
       }
+      fnByFile.set(f.path, fileSyms);
+
+      // Resolve import bindings (local name → resolved file path) for this file.
+      const resolvedBindings: Record<string, string> = {};
       for (const spec of new Set(p.imports)) {
         const target = resolveJsImport(f.path, spec, allNodeIds);
         if (target && target !== f.path && !edges.some(
@@ -1123,8 +1254,18 @@ function buildGraph(files: { path: string; content: string }[]): {
           edges.push({ source: f.path, target, type: "imports" });
         }
       }
+      for (const [local, spec] of Object.entries(p.bindings)) {
+        const target = resolveJsImport(f.path, spec, allNodeIds);
+        if (target) resolvedBindings[local] = target;
+      }
+      jsBindings.set(f.path, resolvedBindings);
+
       for (const [caller, callee] of p.calls) {
-        pendingCalls.push([`${f.path}::${caller}`, callee]);
+        pendingJsCalls.push({
+          callerId: `${f.path}::${caller}`,
+          callerFile: f.path,
+          callee,
+        });
       }
     }
     else if (ext === ".go") {
@@ -1203,7 +1344,7 @@ function buildGraph(files: { path: string; content: string }[]): {
     // .h / .hpp: file node only
   }
 
-  // Resolve deferred calls
+  // Resolve deferred calls (non-JS path: use global fnIndex by bare name).
   for (const [callerId, calleeBare] of pendingCalls) {
     const calleeId = fnIndex[calleeBare];
     if (!calleeId || calleeId === callerId) continue;
@@ -1211,6 +1352,37 @@ function buildGraph(files: { path: string; content: string }[]): {
       (e) => e.source === callerId && e.target === calleeId && e.type === "calls",
     )) {
       edges.push({ source: callerId, target: calleeId, type: "calls" });
+    }
+  }
+
+  // Resolve JS/TS calls through the per-file binding map first. This prevents
+  // wrong-file wiring when many files declare the same short helper name.
+  for (const { callerId, callerFile, callee } of pendingJsCalls) {
+    let calleeId: string | null = null;
+    const bindings = jsBindings.get(callerFile);
+    const targetFile = bindings?.[callee];
+    if (targetFile) {
+      const fileSyms = fnByFile.get(targetFile);
+      if (fileSyms?.[callee]) calleeId = fileSyms[callee];
+      // Default-export pattern: treat any imported binding as the file node
+      // if no symbol matched (still meaningful as "uses this module").
+      if (!calleeId) calleeId = targetFile;
+    }
+    // Same-file resolution: prefer a symbol declared in the caller's own file.
+    if (!calleeId) {
+      const ownSyms = fnByFile.get(callerFile);
+      if (ownSyms?.[callee]) calleeId = ownSyms[callee];
+    }
+    // Last-resort fallback to global fnIndex (kept conservative: only when
+    // there's no ambiguity from imports).
+    if (!calleeId && !bindings?.[callee]) {
+      calleeId = fnIndex[callee] ?? null;
+    }
+    if (!calleeId || calleeId === callerId) continue;
+    if (!edges.some(
+      (e) => e.source === callerId && e.target === calleeId && e.type === "calls",
+    )) {
+      edges.push({ source: callerId, target: calleeId!, type: "calls" });
     }
   }
 
