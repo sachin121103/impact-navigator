@@ -147,8 +147,8 @@ Deno.serve(async (req) => {
     }
     const repoId = (repo as any).id;
 
-    const ids = extractIdentifiers(code);
-    if (ids.size === 0) throw new Error("Could not find any identifiers in the snippet");
+    const idHits = extractIdentifiers(code);
+    if (idHits.size === 0) throw new Error("Could not find any identifiers in the snippet");
 
     const { data: symbols, error: symErr } = await userClient
       .from("symbols")
@@ -166,18 +166,75 @@ Deno.serve(async (req) => {
       byName.set(s.name, arr);
     }
 
-    // Resolve identifier hits → matched symbols in the repo.
+    // ── Accuracy filter ──────────────────────────────────────────────────────
+    // For each identifier hit, decide whether to trust the match and which of
+    // the (possibly many) same-named symbols actually belong.
+    //
+    // Rules:
+    //  1. Skip generic/common names (e.g. "update", "render") unless we have a
+    //     member-access signal (`.update()`) — bare calls to common names cause
+    //     huge false-positive blasts.
+    //  2. If a name resolves to >8 symbols across the repo, it's almost certainly
+    //     ambiguous — drop it unless the snippet co-mentions another identifier
+    //     that exists in the same file (then prefer that file's match only).
+    //  3. Co-location boost: when an identifier is ambiguous (2-8 candidates),
+    //     prefer the candidate whose file also contains other matched
+    //     identifiers from the snippet. If none co-locate, fall back to all
+    //     candidates only when the snippet has fewer than 4 hits total
+    //     (otherwise the user clearly pasted a real chunk and we should be
+    //     strict about ambiguity).
     const matched: any[] = [];
     const matchedIds = new Set<string>();
-    for (const id of ids) {
-      const hits = byName.get(id);
-      if (!hits) continue;
-      for (const h of hits) {
-        if (!matchedIds.has(h.id)) {
-          matchedIds.add(h.id);
-          matched.push(h);
+    const totalSnippetHits = idHits.size;
+
+    // Pre-build a "files in which any matched identifier could live" set so
+    // co-location can boost ambiguous picks. Done in two passes: first the
+    // unambiguous matches, then the ambiguous ones using that anchor.
+    const anchorFiles = new Set<string>();
+    const ambiguousQueue: { hit: IdentifierHit; cands: any[] }[] = [];
+
+    for (const hit of idHits.values()) {
+      const cands = byName.get(hit.name);
+      if (!cands || cands.length === 0) continue;
+
+      // Common-name guard
+      if (COMMON_NAMES.has(hit.name) && !hit.hasMember) continue;
+
+      if (cands.length === 1) {
+        const c = cands[0];
+        if (!matchedIds.has(c.id)) {
+          matchedIds.add(c.id);
+          matched.push(c);
+          anchorFiles.add(c.file_path);
+        }
+      } else {
+        ambiguousQueue.push({ hit, cands });
+      }
+    }
+
+    for (const { hit, cands } of ambiguousQueue) {
+      // Hard ambiguity ceiling: too many same-named symbols ⇒ require co-location.
+      const colocated = cands.filter((c) => anchorFiles.has(c.file_path));
+      if (colocated.length > 0) {
+        for (const c of colocated) {
+          if (!matchedIds.has(c.id)) {
+            matchedIds.add(c.id);
+            matched.push(c);
+          }
+        }
+        continue;
+      }
+      // No co-location: only accept when ambiguity is mild AND the snippet is
+      // short enough that we can't expect overlap.
+      if (cands.length <= 3 && totalSnippetHits < 4 && hit.hasMember) {
+        for (const c of cands) {
+          if (!matchedIds.has(c.id)) {
+            matchedIds.add(c.id);
+            matched.push(c);
+          }
         }
       }
+      // Otherwise drop — better to miss than to wire phantom blasts.
     }
 
     if (matched.length === 0) {
@@ -187,7 +244,7 @@ Deno.serve(async (req) => {
           matched: [],
           affected: [],
           summary: { high: 0, medium: 0, low: 0, total: 0 },
-          identifiers: [...ids].slice(0, 50),
+          identifiers: [...idHits.keys()].slice(0, 50),
           durationMs: Date.now() - startedAt,
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
