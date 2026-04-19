@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import {
   forceCollide,
   forceLink,
@@ -55,7 +55,7 @@ const EDGE_BASE_OPACITY: Record<EdgeType, number> = {
   contains: 0.1,
 };
 
-const baseR = (type: NodeType) => (type === "file" ? 5 : type === "class" ? 4 : 3);
+const baseR = (type: NodeType) => (type === "file" ? 6 : type === "class" ? 5 : 4.25);
 const nodeR = (n: SimNode) => baseR(n.type) + Math.sqrt(n.degree ?? 0) * 1.4;
 
 const zoneKey = (file: string): string => {
@@ -80,6 +80,7 @@ interface PhysicsConfig {
 const DEFAULT_PHYSICS: PhysicsConfig = { repel: -180, linkDistance: 110, centerStrength: 0.04 };
 
 const PAPER_BG = "hsl(38,36%,96%)";
+const SAFE_INSET = { top: 56, right: 26, bottom: 26, left: 26 };
 
 // Warm glass panels — matches the paper design system
 const GLASS: React.CSSProperties = {
@@ -158,6 +159,7 @@ export const CodeGraphCanvas = ({
   const simRef = useRef<Simulation<SimNode, SimLink> | null>(null);
   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const nodeRefs = useRef<Map<string, SVGGElement>>(new Map());
+  const labelRefs = useRef<Map<string, SVGGElement>>(new Map());
   // One <path> per edge style — bulk geometry. Hover overlay is separate.
   const edgePathRefs = useRef<Map<EdgeType, SVGPathElement>>(new Map());
   const edgeOverlayRef = useRef<SVGPathElement | null>(null);
@@ -436,14 +438,18 @@ export const CodeGraphCanvas = ({
       for (const id of next) {
         if (!culled.has(id)) {
           const el = nodeRefs.current.get(id);
+          const labelEl = labelRefs.current.get(id);
           if (el) el.style.display = "none";
+          if (labelEl) labelEl.style.display = "none";
           changed = true;
         }
       }
       for (const id of culled) {
         if (!next.has(id)) {
           const el = nodeRefs.current.get(id);
+          const labelEl = labelRefs.current.get(id);
           if (el) el.style.display = "";
+          if (labelEl) labelEl.style.display = "";
           changed = true;
         }
       }
@@ -515,8 +521,18 @@ export const CodeGraphCanvas = ({
     const onTick = () => {
       tickCounter++;
       for (const n of nodes) {
-        if (n.x == null) continue;
+        if (n.x == null || n.y == null) continue;
+        const rr = analysisRadius(n, analysisMode, metrics) + 16;
+        const minX = SAFE_INSET.left + rr;
+        const maxX = size.w - SAFE_INSET.right - rr;
+        const minY = SAFE_INSET.top + rr;
+        const maxY = size.h - SAFE_INSET.bottom - rr;
+        n.x = Math.max(minX, Math.min(maxX, n.x));
+        n.y = Math.max(minY, Math.min(maxY, n.y));
         nodeRefs.current
+          .get(n.id)
+          ?.setAttribute("transform", `translate(${n.x},${n.y})`);
+        labelRefs.current
           .get(n.id)
           ?.setAttribute("transform", `translate(${n.x},${n.y})`);
       }
@@ -967,6 +983,58 @@ export const CodeGraphCanvas = ({
             />
           </g>
 
+          <g pointerEvents="none">
+            {(() => {
+              return nodes.map((n) => {
+                const r = analysisRadius(n, analysisMode, metrics);
+                const isSelected = selectedId === n.id;
+                const isHovered = hoveredId === n.id;
+                const isActive = isSelected || isHovered;
+                const isDim = finalHighlight ? !finalHighlight.has(n.id) : false;
+                const focusHide = focusMode && finalHighlight && isDim;
+                const nodeOpacity = focusHide ? 0.05 : isDim ? 0.15 : 1;
+                const labelVisible = visibleLabelIds.has(n.id);
+                if (!labelVisible) return null;
+                const labelText = n.type === "file" ? (n.file.split("/").pop() ?? n.name) : n.name;
+                const fontSize = isActive ? 10.5 : n.type === "file" ? 9 : 8;
+                const labelW = labelText.length * fontSize * 0.58 + 8;
+                return (
+                  <g
+                    key={`label-${n.id}`}
+                    ref={(el) => {
+                      if (el) labelRefs.current.set(n.id, el as SVGGElement);
+                      else labelRefs.current.delete(n.id);
+                    }}
+                    style={{ opacity: nodeOpacity, transition: "opacity 200ms" }}
+                  >
+                    <rect
+                      x={r + 3}
+                      y={-fontSize / 2 - 2}
+                      width={labelW}
+                      height={fontSize + 4}
+                      rx={3}
+                      ry={3}
+                      fill={PAPER_BG}
+                      fillOpacity={isActive ? 0.88 : 0.74}
+                    />
+                    <text
+                      x={r + 5}
+                      y={4}
+                      fontSize={fontSize}
+                      fontFamily="var(--font-mono)"
+                      fontWeight={isActive ? 600 : 400}
+                      fill={isActive ? GLASS_TEXT : "hsl(25,12%,28%)"}
+                      opacity={isActive ? 1 : 0.72}
+                      style={{ userSelect: "none" }}
+                    >
+                      {labelText}
+                    </text>
+                  </g>
+                );
+              });
+            })()}
+          </g>
+
           {/* Nodes */}
           <g>
             {(() => {
@@ -995,6 +1063,7 @@ export const CodeGraphCanvas = ({
                 const btScore = analysisMode === "betweenness" && metrics
                   ? (metrics.betweenness.get(n.id) ?? 0) : 0;
                 const isBtWarn = btScore > 0.5;
+                const isSparse = (n.degree ?? 0) <= 1;
                 // Structural anomalies — always visible regardless of mode
                 const isCyclic = metrics?.cycles.cyclicNodeIds.has(n.id) ?? false;
                 const isOrphan = metrics?.orphans.orphanIds.has(n.id) ?? false;
@@ -1111,14 +1180,21 @@ export const CodeGraphCanvas = ({
                         opacity={0.5}
                       />
                     )}
+                    {isSparse && !isActive && (
+                      <circle
+                        r={r + 2.5}
+                        fill={PAPER_BG}
+                        opacity={0.96}
+                      />
+                    )}
                     {/* Node */}
                     <circle
                       r={r}
                       fill={color}
                       stroke={PAPER_BG}
-                      strokeWidth={1.5}
+                      strokeWidth={isSparse ? 1.9 : 1.5}
                       filter={nodeFilter}
-                      opacity={isActive ? 1 : 0.88}
+                      opacity={1}
                     />
                     {/* Betweenness warning icon */}
                     {isBtWarn && (
@@ -1129,38 +1205,12 @@ export const CodeGraphCanvas = ({
                         style={{ pointerEvents: "none", userSelect: "none" }}
                       >⚠</text>
                     )}
-                    {/* Label with background pill */}
-                    {labelVisible && (
-                      <g style={{ pointerEvents: "none", transition: "opacity 200ms" }}>
-                        <rect
-                          x={r + 3}
-                          y={-fontSize / 2 - 2}
-                          width={labelW}
-                          height={fontSize + 4}
-                          rx={3}
-                          ry={3}
-                          fill={PAPER_BG}
-                          fillOpacity={isActive ? 0.95 : 0.85}
-                        />
-                        <text
-                          x={r + 5}
-                          y={4}
-                          fontSize={fontSize}
-                          fontFamily="var(--font-mono)"
-                          fontWeight={isActive ? 600 : 400}
-                          fill={isActive ? GLASS_TEXT : "hsl(25,12%,28%)"}
-                          opacity={isActive ? 1 : 0.78}
-                          style={{ userSelect: "none" }}
-                        >
-                          {labelText}
-                        </text>
-                      </g>
-                    )}
                   </g>
                 );
               });
             })()}
           </g>
+
         </g>
       </svg>
 
@@ -1334,13 +1384,16 @@ const LegendDot = ({ color, label }: { color: string; label: string }) => (
   </span>
 );
 
-const LegendLine = ({ color, solid, label }: { color: string; solid: boolean; label: string }) => (
-  <span className="flex items-center gap-1.5">
-    <span className="inline-block h-px w-4"
-      style={solid ? { background: color } : { borderTop: `1px dashed ${color}` }} />
-    {label}
-  </span>
+const LegendLine = forwardRef<HTMLSpanElement, { color: string; solid: boolean; label: string }>(
+  ({ color, solid, label }, ref) => (
+    <span ref={ref} className="flex items-center gap-1.5">
+      <span className="inline-block h-px w-4"
+        style={solid ? { background: color } : { borderTop: `1px dashed ${color}` }} />
+      {label}
+    </span>
+  ),
 );
+LegendLine.displayName = "LegendLine";
 
 const METRIC_GRADIENT: Record<string, { stops: string[]; low: string; high: string }> = {
   pagerank: {
