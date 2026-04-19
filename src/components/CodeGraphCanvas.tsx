@@ -1335,6 +1335,138 @@ export const CodeGraphCanvas = ({
   );
 };
 
+// Animated loading skeleton: faint orbs pulse across the canvas while a
+// status line cycles through plausible work descriptions. Pure visual —
+// purely for perceived performance.
+const ComposingScrim = ({
+  visible,
+  width,
+  height,
+}: {
+  visible: boolean;
+  width: number;
+  height: number;
+}) => {
+  const STAGES = [
+    "Reading structure…",
+    "Placing nodes…",
+    "Drawing connections…",
+    "Settling layout…",
+  ];
+  const [stage, setStage] = useState(0);
+  const [mounted, setMounted] = useState(visible);
+
+  useEffect(() => {
+    if (visible) setMounted(true);
+    else {
+      const t = window.setTimeout(() => setMounted(false), 320);
+      return () => window.clearTimeout(t);
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    setStage(0);
+    const id = window.setInterval(() => {
+      setStage((s) => Math.min(s + 1, STAGES.length - 1));
+    }, 240);
+    return () => window.clearInterval(id);
+  }, [visible]);
+
+  // Deterministic orb positions hint at the upcoming graph clusters.
+  const orbs = useMemo(() => {
+    const out: { x: number; y: number; r: number; delay: number; hue: number }[] = [];
+    const cols = 5;
+    const rows = 4;
+    let i = 0;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const jitterX = ((i * 53) % 17) - 8;
+        const jitterY = ((i * 37) % 13) - 6;
+        out.push({
+          x: ((c + 0.5) / cols) * width + jitterX,
+          y: ((r + 0.5) / rows) * height + jitterY,
+          r: 6 + ((i * 7) % 9),
+          delay: (i % 8) * 90,
+          hue: 30 + ((i * 47) % 180),
+        });
+        i++;
+      }
+    }
+    return out;
+  }, [width, height]);
+
+  if (!mounted) return null;
+
+  return (
+    <div
+      className="pointer-events-none absolute inset-0"
+      style={{
+        opacity: visible ? 1 : 0,
+        transition: "opacity 280ms ease-out",
+      }}
+    >
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="absolute inset-0 h-full w-full"
+        preserveAspectRatio="none"
+      >
+        {orbs.map((o, i) => (
+          <circle
+            key={i}
+            cx={o.x}
+            cy={o.y}
+            r={o.r}
+            fill={`hsl(${o.hue},38%,72%)`}
+            opacity={0.18}
+            style={{
+              animation: `radar-pulse 1.4s ease-in-out ${o.delay}ms infinite`,
+              transformOrigin: `${o.x}px ${o.y}px`,
+            }}
+          />
+        ))}
+      </svg>
+
+      <div className="absolute inset-0 flex items-center justify-center">
+        <div
+          className="flex flex-col items-center gap-2.5 rounded-2xl border px-5 py-3 shadow-paper"
+          style={{ ...GLASS, minWidth: 220 }}
+        >
+          <div
+            className="flex items-center gap-2 font-mono text-[11px]"
+            style={{ color: GLASS_TEXT, letterSpacing: "0.05em" }}
+          >
+            <span
+              className="inline-block h-1.5 w-1.5 rounded-full"
+              style={{
+                background: "hsl(184,68%,34%)",
+                animation: "radar-pulse 1.1s ease-in-out infinite",
+              }}
+            />
+            <span key={stage} className="animate-fade-in">
+              {STAGES[stage]}
+            </span>
+          </div>
+          <div
+            className="h-0.5 w-full overflow-hidden rounded-full"
+            style={{ background: "hsl(25,10%,88%)" }}
+          >
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: "40%",
+                background:
+                  "linear-gradient(90deg, transparent, hsl(184,68%,34%), transparent)",
+                animation: "shimmer-slide 1.2s linear infinite",
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const Btn = ({
   onClick, label, children, active, className,
 }: {
