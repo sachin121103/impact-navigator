@@ -1,19 +1,10 @@
 /**
  * Animated radar — concentric rings + sweeping arc.
- * Idle: empty radar with a faint "awaiting change" label.
- * Result: each dot represents an affected symbol.
- *   - distance from center = call-graph depth (closer = more direct)
- *   - dot size = symbol fan_in (bigger = wider downstream propagation)
- *   - color = single neutral ink, opacity falls off with depth
+ * Decorative idle dots; result mode colors dots by per-symbol risk.
  */
 
 interface AffectedDot {
-  id?: string;
-  name?: string;
-  file_path?: string;
   depth: number;
-  fan_in?: number;
-  // Legacy field — accepted but no longer used for color.
   risk?: "high" | "medium" | "low";
 }
 
@@ -23,21 +14,27 @@ interface Props {
 
 const RING_RADII = [40, 68, 96, 124];
 
+const STATIC_DOTS = [
+  { r: 50, angle: -60 },
+  { r: 50, angle: 110 },
+  { r: 80, angle: 20 },
+  { r: 80, angle: -130 },
+  { r: 80, angle: 200 },
+  { r: 110, angle: 60 },
+  { r: 110, angle: -20 },
+  { r: 110, angle: 160 },
+  { r: 130, angle: -90 },
+];
+
+const RISK_FILL: Record<NonNullable<AffectedDot["risk"]>, string> = {
+  high: "hsl(var(--risk-high))",
+  medium: "hsl(var(--risk-med))",
+  low: "hsl(var(--risk-low))",
+};
+
 const polar = (r: number, angle: number) => {
   const rad = (angle * Math.PI) / 180;
   return { x: 160 + r * Math.cos(rad), y: 160 + r * Math.sin(rad) };
-};
-
-const depthOpacity = (depth: number) => {
-  // d1 → 0.95, d2 → 0.75, d3 → 0.55, d4+ → 0.4
-  const map = [0.95, 0.75, 0.55, 0.4];
-  return map[Math.min(Math.max(depth, 1), 4) - 1];
-};
-
-const fanInRadius = (fanIn: number) => {
-  // Clamp 0..20 → 3..7 px
-  const f = Math.max(0, Math.min(fanIn, 20));
-  return 3 + (f / 20) * 4;
 };
 
 function buildResultDots(affected: AffectedDot[]) {
@@ -46,25 +43,14 @@ function buildResultDots(affected: AffectedDot[]) {
     const d = Math.min(Math.max(a.depth, 1), 4);
     (byDepth[d] = byDepth[d] ?? []).push(a);
   }
-  const dots: {
-    x: number; y: number; r: number; opacity: number;
-    name: string; file: string; depth: number; fanIn: number;
-  }[] = [];
+  const dots: { x: number; y: number; fill: string }[] = [];
   for (const [depthStr, group] of Object.entries(byDepth)) {
     const depth = Number(depthStr);
     const radius = RING_RADII[depth - 1] ?? RING_RADII[3];
     group.forEach((a, i) => {
       const angle = (360 / group.length) * i - 90;
       const { x, y } = polar(radius, angle);
-      dots.push({
-        x, y,
-        r: fanInRadius(a.fan_in ?? 0),
-        opacity: depthOpacity(depth),
-        name: a.name ?? "symbol",
-        file: a.file_path ?? "",
-        depth,
-        fanIn: a.fan_in ?? 0,
-      });
+      dots.push({ x, y, fill: RISK_FILL[a.risk ?? "low"] });
     });
   }
   return dots;
@@ -116,41 +102,24 @@ export const RadarVisual = ({ results }: Props) => {
           <path d="M 160 160 L 290 160 A 130 130 0 0 0 215 50 Z" fill="url(#sweep)" />
         </g>
 
+        {/* idle decorative dots */}
+        {!hasResults &&
+          STATIC_DOTS.map((d, i) => {
+            const { x, y } = polar(d.r, d.angle);
+            return (
+              <circle key={i} cx={x} cy={y} r={3} fill="hsl(var(--accent))" opacity="0.7" />
+            );
+          })}
+
+        {/* result dots — risk-colored */}
         {resultDots &&
           resultDots.map((d, i) => (
-            <circle
-              key={i}
-              cx={d.x}
-              cy={d.y}
-              r={d.r}
-              fill="hsl(var(--foreground))"
-              opacity={d.opacity}
-            >
-              <title>
-                {d.name}
-                {d.file ? ` · ${d.file.split("/").slice(-2).join("/")}` : ""}
-                {` · depth ${d.depth} · fan-in ${d.fanIn}`}
-              </title>
-            </circle>
+            <circle key={i} cx={d.x} cy={d.y} r={4} fill={d.fill} />
           ))}
 
-        {/* center node — the changed symbol */}
+        {/* center node */}
         <circle cx="160" cy="160" r="10" fill="hsl(var(--primary))" />
         <circle cx="160" cy="160" r="5" fill="hsl(var(--background))" />
-
-        {/* idle label */}
-        {!hasResults && (
-          <text
-            x="160"
-            y="186"
-            textAnchor="middle"
-            className="fill-muted-foreground"
-            style={{ fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: 1.5 }}
-            opacity="0.55"
-          >
-            AWAITING CHANGE
-          </text>
-        )}
       </svg>
     </div>
   );
