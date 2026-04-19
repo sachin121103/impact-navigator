@@ -215,18 +215,26 @@ const NodeMark = ({
       ) : (
         <circle r={r} fill={fill} />
       )}
-      {(isSelected || isCovering) && (
-        <text
-          x={r + 4}
-          y={3}
-          fontFamily="ui-monospace, monospace"
-          fontSize={9}
-          fill="hsl(var(--foreground))"
-          opacity={0.85}
-        >
-          {node.name.length > 22 ? node.name.slice(0, 22) + "…" : node.name}
-        </text>
-      )}
+      {(() => {
+        const label =
+          node.type === "file"
+            ? (node.file.split("/").pop() ?? node.name)
+            : node.name.replace(/.*::/, "");
+        const truncated = label.length > 22 ? label.slice(0, 22) + "…" : label;
+        return (
+          <text
+            x={r + 4}
+            y={3}
+            fontFamily="ui-monospace, monospace"
+            fontSize={9}
+            fill="hsl(var(--foreground))"
+            opacity={isSelected || isCovering ? 0.9 : dim ? 0 : 0.6}
+            style={{ pointerEvents: "none" }}
+          >
+            {truncated}
+          </text>
+        );
+      })()}
     </g>
   );
 };
