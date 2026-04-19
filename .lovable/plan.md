@@ -1,52 +1,67 @@
 
-## Goal
-Eliminate the lag spike when the cursor sweeps through dense clusters of small nodes on `/code-graph`.
 
-## Root cause
-Every small node has its own `onMouseEnter`/`onMouseLeave` that calls `setHoveredId(...)`. Sweeping through a cluster fires this **dozens of times per second**, and each one triggers:
-1. A full React re-render of the canvas tree (thousands of `<g>` nodes).
-2. Recompute of `highlight` neighbour set + `visibleLabelIds` (sorts all N nodes).
-3. `useEffect` → `__restart` wakes the simulation back up to `alpha 0.1`.
-4. Edge overlay path rebuild.
+## Why your graph looks disjoint and messy
 
-So a 200ms cursor sweep across 30 tiny nodes = ~60 full re-renders + 60 sim restarts = visible freeze.
+I pulled the actual file tree for `AnirudhT28/Music-Artist-Reccomender`. Your repo is **mostly Java**, with one Python file:
 
-## Approach (your instinct is right — debounce + smarter pick)
+```
+data_generation/crawler.py        ← Python (only file the parser handles)
+src/main/java/.../SpotifyGraphServiceApplication.java
+src/main/java/.../controller/ArtistController.java
+src/main/java/.../model/Artist.java
+src/main/java/.../repository/ArtistRepository.java
+src/main/resources/static/index.html
+src/test/java/.../SpotifyGraphServiceApplication.java
+pom.xml, Dockerfile, README.md, artist_graph.db
+```
 
-### 1. Debounce hover state (the main fix)
-Replace the per-node React `onMouseEnter`/`Leave` with a **single `pointermove` listener on the SVG**, plus a small debounce (~40ms) before committing to `setHoveredId`. Mid-sweep transitions never reach React state — only the node the cursor actually rests on does.
+The `graph-meta` edge function only knows **Python, C/C++, and JS/TS** (`.py .ipynb .c .cpp .h .ts .tsx .js .jsx .mjs .cjs`). Java, XML, properties, HTML, .db, Dockerfile are all silently dropped at the file-filter (`KEEP_EXT` in `graph-meta/index.ts:54`).
 
-### 2. Spatial hit-testing instead of per-node handlers
-On `pointermove`, convert client coords → graph coords using the current zoom transform, then find the nearest node within `r + 4px` using a quick scan (or a cached quadtree if N > 1000). Drop the per-node mouse handlers entirely. This also means:
-- Fewer event listeners attached to the DOM (tiny memory + paint win).
-- Hit area can be slightly inflated for small nodes (currently ~3px radius is hard to hit anyway — bonus UX).
+That's why the network response shows literally only:
+- 1 file node: `data_generation/crawler.py`
+- 1 function node: `build_and_save_graph`
+- **0 edges**
 
-### 3. Don't restart the simulation on hover
-The `useEffect` at line 619 calls `__restart` whenever `finalHighlight` changes. Hover changes shouldn't wake physics — only the overlay path needs repainting. Split into:
-- Hover change → directly rebuild the edge overlay path via ref (no sim restart, no React tree rerender of nodes).
-- Selection / search change → keep the restart (these legitimately want a tick).
+A 2-node graph with no edges has nothing to attract the nodes together — the force simulation lays them out as two isolated dots floating in space. That's the "disjoint and messy" effect: there's no graph to draw, just orphans.
 
-### 4. Skip hover entirely on tiny nodes when zoomed out
-When `zoomLevel < 0.6`, function-type nodes are visually <2px and hovering them is unintentional. Disable hover pickup for `type === "function"` below that zoom — only files/classes respond. Removes the worst-case cluster (function clumps) from the hot path.
+## Two real causes
 
-### 5. requestAnimationFrame coalescing
-The pointermove listener writes to a `pendingHoverId` ref. A single rAF loop reads it and only calls `setHoveredId` when the value differs from the current state. This guarantees max one update per frame regardless of mouse sample rate (some mice fire 1000Hz).
+1. **Java is not parsed at all** → ~95% of this repo is invisible to Meridian.
+2. **Even on supported repos**, files with no imports/calls become floating islands because the only thing pulling nodes together is the link force. With weak/no edges → no clustering → looks scattered.
+
+## Plan — make the graph render meaningfully on mixed/Java repos
+
+### Step 1: Add a Java parser to `graph-meta`
+Mirror the existing C/C++ extractor pattern. Java is structurally similar (braces, methods inside classes, `import x.y.Z;` statements). Implement:
+- File-level node per `.java`
+- Class node per `class Foo { }`
+- Method node per method declaration inside a class body
+- `imports` edges from `import a.b.C;` resolved against other `.java` files in the repo by class name
+- `calls` edges from `methodName(...)` inside method bodies, resolved by short name (same fallback the JS/Python paths use)
+
+Add `.java` to `KEEP_EXT` and dispatch in `buildGraph` alongside `.cpp`/`.ts`.
+
+### Step 2: Tell the user when their repo is mostly unsupported
+In the `_meta` response, include `parsed_file_count` vs `file_count` and a `skipped_extensions` summary (e.g. `{ ".java": 6, ".xml": 2 }`). On the client (`CodeGraph.tsx`), if `parsed_file_count < 3` show a soft banner: *"Only N source files recognised in this repo — Meridian currently parses Python, JS/TS, C/C++, and Java. Other files are shown as orphans."*
+
+### Step 3: Stop orphan files from floating in empty space
+In `CodeGraphCanvas.tsx`, when a file node has **zero edges** in either direction, snap it into a small "unconnected" cluster in a corner (extra `forceX/Y` anchor with `degree===0` files pulled to e.g. lower-right). Prevents the "stars scattered randomly" look on small/sparse repos.
+
+### Step 4 (optional): Surface the parser whitelist on the input field
+Add a small subtitle under the repo URL input: *"Supports Python, JS/TS, C/C++, Java"* so users don't waste time on Go/Rust/Ruby repos and assume the tool is broken.
 
 ## Files
-- **edit** `src/components/CodeGraphCanvas.tsx`
-  - Add SVG-level `onPointerMove` with rAF-coalesced + 40ms debounced hover pick.
-  - Build a simple spatial index (rebuilt on `layoutVersion`) for nearest-node lookup.
-  - Remove `onMouseEnter`/`onMouseLeave` from each node `<g>`.
-  - Split the `__restart` effect: hover doesn't restart, selection/search still does.
-  - Gate hover on `function` nodes when `zoomLevel < 0.6`.
+- **edit** `supabase/functions/graph-meta/index.ts` — add Java parser (~80 lines, mirrors `cFnBodies` + `parseJs` patterns), extend `KEEP_EXT`, extend `buildGraph` dispatch, add `_meta.parsed_file_count` / `_meta.skipped_extensions`.
+- **edit** `src/pages/CodeGraph.tsx` — add the "mostly unsupported" banner + parser-support subtitle on the input.
+- **edit** `src/components/CodeGraphCanvas.tsx` — corner-cluster anchor for fully-isolated file nodes.
 
 ## Out of scope
-- SentinelGraphCanvas (different scale, not reported).
-- Touch/click behaviour — unchanged.
-- Visual styling of hover ring.
+- Go, Rust, Ruby, Kotlin, Swift parsers (separate proposal — same pattern as Java).
+- Maven/Gradle dependency graph from `pom.xml`.
+- Notebook/markdown content extraction beyond what already exists.
 
 ## Verification
-1. Sweep cursor rapidly through a dense cluster of small function nodes — no visible jank, no simulation re-energising.
-2. Hovering a single node still highlights it + neighbours within ~50ms.
-3. Click selection still works exactly as before.
-4. At low zoom, sweeping across function clumps is silent; files/classes still respond.
+1. Re-index `AnirudhT28/Music-Artist-Reccomender` — see ~7 nodes (5 Java files + 1 Python + class/method nodes), with `imports` edges between `ArtistController`, `Artist`, `ArtistRepository`, and `SpotifyGraphServiceApplication` forming a coherent cluster.
+2. Index a Python-only repo (e.g. `psf/requests`) — unchanged behaviour, same edge counts as before.
+3. Index a Go-only repo — see banner *"0 source files recognised"* instead of a confusing scatter.
+
