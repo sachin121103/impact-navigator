@@ -1006,6 +1006,7 @@ function parseJs(rawSrc: string): JsParsed {
   for (const d of decls) out.functions.push(d.qname);
 
   // Attribute calls to innermost containing decl
+  const reJsx = /<([A-Z][A-Za-z0-9_]*)/g;
   for (const d of decls) {
     const re = new RegExp(JS_CALL_RE.source, "g");
     re.lastIndex = d.bodyStart + 1;
@@ -1024,6 +1025,33 @@ function parseJs(rawSrc: string): JsParsed {
         }
       }
       if (innermost === d) out.calls.push([d.qname, callee]);
+    }
+
+    // JSX component usage inside this decl → treat as a call edge.
+    // <Capitalized... is a React component reference; lowercase tags are HTML.
+    const jr = new RegExp(reJsx.source, "g");
+    jr.lastIndex = d.bodyStart + 1;
+    const seen = new Set<string>();
+    let jm: RegExpExecArray | null;
+    while ((jm = jr.exec(src)) !== null) {
+      if (jm.index >= d.bodyEnd) break;
+      const comp = jm[1];
+      if (JSX_HTML_TAGS.has(comp.toLowerCase()) && comp[0] !== comp[0].toUpperCase()) continue;
+      if (JS_RESERVED.has(comp)) continue;
+      // Innermost-decl check
+      let innermost = d;
+      for (const e of decls) {
+        if (e === d) continue;
+        if (e.bodyStart > d.bodyStart && e.bodyEnd <= d.bodyEnd &&
+            e.bodyStart <= jm.index && jm.index < e.bodyEnd) {
+          if (e.bodyStart > innermost.bodyStart) innermost = e;
+        }
+      }
+      if (innermost !== d) continue;
+      const key = `${d.qname}→${comp}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.calls.push([d.qname, comp]);
     }
   }
 
