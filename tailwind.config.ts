@@ -107,6 +107,14 @@ export default {
           "0%, 100%": { opacity: "1" },
           "50%": { opacity: "0" },
         },
+        "shimmer-slide": {
+          "0%": { transform: "translateX(-150%)" },
+          "100%": { transform: "translateX(350%)" },
+        },
+        "fade-in": {
+          "0%": { opacity: "0", transform: "translateY(2px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
@@ -115,6 +123,8 @@ export default {
         "radar-sweep": "radar-sweep 6s linear infinite",
         "fade-up": "fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) both",
         "blink": "blink 1.1s steps(2, start) infinite",
+        "shimmer-slide": "shimmer-slide 1.2s linear infinite",
+        "fade-in": "fade-in 220ms ease-out",
       },
     },
   },
