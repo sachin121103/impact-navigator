@@ -106,14 +106,14 @@ Deno.serve(async (req) => {
   );
 
   const token = authHeader.replace("Bearer ", "");
-  const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
-  if (claimsErr || !claimsData?.claims?.sub) {
+  const { data: userData, error: userErr } = await userClient.auth.getUser(token);
+  if (userErr || !userData?.user?.id) {
     return new Response(
       JSON.stringify({ ok: false, error: "Invalid session" }),
       { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
-  const userId = claimsData.claims.sub as string;
+  const userId = userData.user.id;
 
   // Service-role client used only for the final impact_runs insert (which
   // still passes through the RLS WITH CHECK because we set repo_id).

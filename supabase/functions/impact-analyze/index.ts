@@ -38,8 +38,8 @@ Deno.serve(async (req) => {
     { global: { headers: { Authorization: authHeader } } },
   );
   const token = authHeader.replace("Bearer ", "");
-  const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
-  if (claimsErr || !claimsData?.claims?.sub) return json({ error: "Invalid session" }, 401);
+  const { data: userData, error: userErr } = await userClient.auth.getUser(token);
+  if (userErr || !userData?.user?.id) return json({ error: "Invalid session" }, 401);
 
   let body: { repoUrl?: string; repoId?: string; query?: string };
   try {

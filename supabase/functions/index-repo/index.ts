@@ -611,14 +611,14 @@ Deno.serve(async (req) => {
         { global: { headers: { Authorization: authHeader } } },
       );
       const token = authHeader.replace("Bearer ", "");
-      const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
-      if (claimsErr || !claimsData?.claims?.sub) {
+      const { data: userData, error: userErr } = await userClient.auth.getUser(token);
+      if (userErr || !userData?.user?.id) {
         return new Response(
           JSON.stringify({ ok: false, error: "Invalid session" }),
           { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
-      ownerId = claimsData.claims.sub as string;
+      ownerId = userData.user.id;
 
       const body = await req.json().catch(() => ({}));
       if (!body.repoUrl) throw new Error("repoUrl is required");
