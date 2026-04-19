@@ -242,16 +242,34 @@ Deno.serve(async (req) => {
     const hints = extractSymbolHints(prompt);
     const symbolMap = new Map((symbols as any[]).map((s) => [s.id, s]));
 
-    let bestSymbol: any = null;
-    let bestScore = -1;
-    for (const sym of symbols as any[]) {
-      const s = scoreSymbol(sym, hints);
-      if (s > bestScore) { bestScore = s; bestSymbol = sym; }
+    const scored = (symbols as any[])
+      .map((sym) => ({ sym, score: scoreSymbol(sym, hints) }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    const top = scored[0];
+    const second = scored[1];
+
+    // Real hits land >= 12 (fuzzy component overlap or better).
+    if (!top || top.score < 12) {
+      const candidates = scored.slice(0, 5).map((s) => s.sym.qualified_name);
+      throw new Error(
+        candidates.length
+          ? `No close match for the symbol in your prompt. Did you mean: ${candidates.slice(0, 3).join(", ")}?`
+          : "Could not identify a symbol from the prompt — try including the exact function or method name.",
+      );
+    }
+    // Ambiguous fuzzy match (no exact/endsWith hit, top two nearly tied).
+    if (second && top.score < 22 && top.score - second.score < 4) {
+      throw new Error(
+        `Ambiguous — multiple symbols match equally well: ${scored
+          .slice(0, 4)
+          .map((s) => s.sym.qualified_name)
+          .join(", ")}. Be more specific.`,
+      );
     }
 
-    if (!bestSymbol || bestScore < 2) {
-      throw new Error("Could not identify a symbol from the prompt — try including the exact function or method name.");
-    }
+    const bestSymbol = top.sym;
 
     const { data: edges, error: edgeErr } = await userClient
       .from("edges")
