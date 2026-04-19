@@ -260,14 +260,16 @@ export interface DeadEntry {
 }
 
 export function findDeadCode(graph: GraphPayload): DeadEntry[] {
-  // Build per-node inbound edges with source file info.
-  const inbound = new Map<string, { source: string; sourceFile: string }[]>();
-  const nodesById = indexNodes(graph.nodes);
+  // Match the Code Graph algorithm: a node is "orphan/dead" if it has
+  // zero inbound edges (excluding the synthetic file→symbol "contains" links,
+  // which don't exist in our payload but we guard anyway).
+  const inDegree = new Map<string, number>();
+  for (const n of graph.nodes) inDegree.set(n.id, 0);
   for (const e of graph.edges) {
-    const srcNode = nodesById.get(e.source);
-    const list = inbound.get(e.target) ?? [];
-    list.push({ source: e.source, sourceFile: srcNode?.file ?? "" });
-    inbound.set(e.target, list);
+    if ((e.type as string) === "contains") continue;
+    if (inDegree.has(e.target)) {
+      inDegree.set(e.target, (inDegree.get(e.target) ?? 0) + 1);
+    }
   }
   // Outbound count for orphan-test detection
   const outDeg = new Map<string, number>();
@@ -275,7 +277,7 @@ export function findDeadCode(graph: GraphPayload): DeadEntry[] {
 
   const out: DeadEntry[] = [];
   for (const n of graph.nodes) {
-    const inc = inbound.get(n.id) ?? [];
+    const inc = inDegree.get(n.id) ?? 0;
 
     // Tests with zero outgoing edges → they don't exercise anything.
     if (isTestNode(n) && (outDeg.get(n.id) ?? 0) === 0) {
@@ -284,15 +286,14 @@ export function findDeadCode(graph: GraphPayload): DeadEntry[] {
     }
 
     if (n.type === "file") {
-      // Skip test files — they're entry points and shouldn't be flagged for "no importers".
+      // Skip test files — they're entry points and shouldn't be flagged.
       if (isTestNode(n)) continue;
-      if (inc.length === 0) out.push({ node: n, reason: "no importers" });
+      if (inc === 0) out.push({ node: n, reason: "no importers" });
       continue;
     }
 
-    // function / class → look for callers OUTSIDE its own file.
-    const externalCallers = inc.filter((i) => i.sourceFile !== n.file);
-    if (externalCallers.length === 0) {
+    // function / class → flagged when nothing in the graph references them.
+    if (inc === 0) {
       out.push({ node: n, reason: "no callers" });
     }
   }
