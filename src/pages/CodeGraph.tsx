@@ -76,7 +76,13 @@ const CodeGraph = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [meta, setMeta] = useState<{
-    owner: string; name: string; branch: string; file_count: number;
+    owner: string;
+    name: string;
+    branch: string;
+    file_count: number;
+    parsed_file_count?: number;
+    candidate_file_count?: number;
+    skipped_extensions?: Record<string, number>;
   } | null>(null);
   const [hasLoadedRepo, setHasLoadedRepo] = useState(false);
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("none");
