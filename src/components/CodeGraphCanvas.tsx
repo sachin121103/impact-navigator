@@ -587,11 +587,14 @@ export const CodeGraphCanvas = ({
     simRef.current = sim;
 
     // ----- Pre-warm: silently advance the simulation before the first paint -----
+    // Aggressively reduced tick counts — the layout converges quickly given
+    // our seeded radial init, and any residual drift is masked by the gentle
+    // post-reveal "breathe" pass.
     setComposing(true);
     setSettled(false);
     let prewarmCancelled = false;
     const prewarmTicks =
-      nodes.length <= 500 ? 120 : nodes.length <= 2000 ? 80 : 50;
+      nodes.length <= 500 ? 50 : nodes.length <= 2000 ? 35 : 22;
     const startSim = () => {
       if (prewarmCancelled) return;
       // Run silent ticks (no DOM writes — `sim.tick(n)` doesn't fire "tick").
@@ -601,15 +604,15 @@ export const CodeGraphCanvas = ({
       updateZoneRects();
       updateCulling();
       // Resume a gentle "breathe into place" — low alpha, fast clean stop.
-      sim.alpha(0.2).alphaDecay(0.08).alphaMin(0.05).restart();
-      // Reveal.
+      sim.alpha(0.18).alphaDecay(0.1).alphaMin(0.05).restart();
+      // Reveal immediately on the next frame.
       requestAnimationFrame(() => {
         if (!prewarmCancelled) setComposing(false);
       });
-      // Mark settled after the breathe completes so zone rects can appear.
+      // Mark settled quickly so zone rects appear without a long wait.
       window.setTimeout(() => {
         if (!prewarmCancelled) setSettled(true);
-      }, 700);
+      }, 250);
     };
     // Defer one frame so the loading scrim paints first.
     const handle = window.setTimeout(startSim, 0);
@@ -896,7 +899,7 @@ export const CodeGraphCanvas = ({
           style={{
             willChange: "transform",
             opacity: composing ? 0 : 1,
-            transition: "opacity 600ms ease-out",
+            transition: "opacity 280ms ease-out",
           }}
         >
           {/* Zone backgrounds */}
