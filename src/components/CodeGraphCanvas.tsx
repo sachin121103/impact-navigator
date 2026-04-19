@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import {
   forceCollide,
   forceLink,
@@ -158,6 +158,7 @@ export const CodeGraphCanvas = ({
   const simRef = useRef<Simulation<SimNode, SimLink> | null>(null);
   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const nodeRefs = useRef<Map<string, SVGGElement>>(new Map());
+  const labelRefs = useRef<Map<string, SVGGElement>>(new Map());
   // One <path> per edge style — bulk geometry. Hover overlay is separate.
   const edgePathRefs = useRef<Map<EdgeType, SVGPathElement>>(new Map());
   const edgeOverlayRef = useRef<SVGPathElement | null>(null);
@@ -436,14 +437,18 @@ export const CodeGraphCanvas = ({
       for (const id of next) {
         if (!culled.has(id)) {
           const el = nodeRefs.current.get(id);
+          const labelEl = labelRefs.current.get(id);
           if (el) el.style.display = "none";
+          if (labelEl) labelEl.style.display = "none";
           changed = true;
         }
       }
       for (const id of culled) {
         if (!next.has(id)) {
           const el = nodeRefs.current.get(id);
+          const labelEl = labelRefs.current.get(id);
           if (el) el.style.display = "";
+          if (labelEl) labelEl.style.display = "";
           changed = true;
         }
       }
@@ -517,6 +522,9 @@ export const CodeGraphCanvas = ({
       for (const n of nodes) {
         if (n.x == null) continue;
         nodeRefs.current
+          .get(n.id)
+          ?.setAttribute("transform", `translate(${n.x},${n.y})`);
+        labelRefs.current
           .get(n.id)
           ?.setAttribute("transform", `translate(${n.x},${n.y})`);
       }
