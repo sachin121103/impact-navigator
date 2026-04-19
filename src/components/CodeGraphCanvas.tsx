@@ -1376,13 +1376,16 @@ const LegendDot = ({ color, label }: { color: string; label: string }) => (
   </span>
 );
 
-const LegendLine = ({ color, solid, label }: { color: string; solid: boolean; label: string }) => (
-  <span className="flex items-center gap-1.5">
-    <span className="inline-block h-px w-4"
-      style={solid ? { background: color } : { borderTop: `1px dashed ${color}` }} />
-    {label}
-  </span>
+const LegendLine = forwardRef<HTMLSpanElement, { color: string; solid: boolean; label: string }>(
+  ({ color, solid, label }, ref) => (
+    <span ref={ref} className="flex items-center gap-1.5">
+      <span className="inline-block h-px w-4"
+        style={solid ? { background: color } : { borderTop: `1px dashed ${color}` }} />
+      {label}
+    </span>
+  ),
 );
+LegendLine.displayName = "LegendLine";
 
 const METRIC_GRADIENT: Record<string, { stops: string[]; low: string; high: string }> = {
   pagerank: {
