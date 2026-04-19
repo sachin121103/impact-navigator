@@ -213,11 +213,11 @@ const TestPath = () => {
               </TabsTrigger>
             </TabsList>
 
-            {/* ── PLAN ── Pick a symbol you're about to change → see only the tests that exercise it. */}
+            {/* ── PLAN ── Pick a symbol → propose tests that should exist for it. */}
             <TabsContent value="plan" className="mt-4 space-y-3">
               {!modifiedId && (
                 <p className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-xs text-muted-foreground">
-                  <span className="font-medium text-foreground">Smart test selection.</span> Pick the symbol you're about to change. We'll walk the graph backwards from it and list every test that reaches it — so you can run only those instead of the full suite.
+                  <span className="font-medium text-foreground">Test proposals.</span> Pick a symbol you're about to ship. We read its dependencies and callers from the graph and suggest the tests you should write — happy paths, edge cases, integration contracts, and regression smoke tests — with a ready-to-use file path and test name.
                 </p>
               )}
               <div className="relative">
@@ -252,13 +252,17 @@ const TestPath = () => {
                 </ul>
               )}
 
-              {plan && (
-                <PlanResult
-                  plan={plan}
-                  modifiedLabel={ctx.nodesById.get(modifiedId!)?.name ?? modifiedId!}
+              {modifiedId && (
+                <ProposalsResult
+                  proposals={proposals}
+                  modifiedLabel={ctx.nodesById.get(modifiedId)?.name ?? modifiedId}
                   onClear={() => setModifiedId(null)}
-                  onCopyJson={() => copy(exportPlanJson(plan), "JSON plan")}
-                  onCopyShell={() => copy(exportPlanShell(plan), "Shell command")}
+                  onCopyJson={() =>
+                    copy(
+                      JSON.stringify({ proposals }, null, 2),
+                      "JSON proposals",
+                    )
+                  }
                 />
               )}
             </TabsContent>
