@@ -731,6 +731,74 @@ export const CodeGraphCanvas = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, layoutVersion, activeId, finalHighlight, importantIds, showFileLabels, showClassLabels, showFnLabels, analysisMode, metrics]);
 
+  // Keep refs in sync for the SVG-level pointer hit-tester (which is bound
+  // once and reads nodes/zoom via refs to avoid handler churn).
+  useEffect(() => { spatialNodesRef.current = nodes; }, [nodes]);
+  useEffect(() => { zoomLevelRef.current = zoomLevel; }, [zoomLevel]);
+
+  // Cleanup pending hover work on unmount.
+  useEffect(() => () => {
+    if (hoverRafRef.current != null) cancelAnimationFrame(hoverRafRef.current);
+    if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current);
+  }, []);
+
+  // Single SVG-level pointer hit-test. Replaces per-node onMouseEnter/Leave —
+  // sweeping through 30 tiny nodes used to fire 30 React state updates; now
+  // only the node the cursor rests on (after a 40ms debounce) hits state.
+  const handlePointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const t = transformRef.current;
+    const k = t.k || 1;
+    // Convert client → svg viewBox → graph coords (account for viewBox scaling)
+    const sx = ((e.clientX - rect.left) / rect.width) * size.w;
+    const sy = ((e.clientY - rect.top) / rect.height) * size.h;
+    const gx = (sx - t.x) / k;
+    const gy = (sy - t.y) / k;
+
+    const nodes = spatialNodesRef.current;
+    const zl = zoomLevelRef.current;
+    // Hit-radius scales with zoom — small nodes get a slightly inflated target
+    // (was effectively unhittable at 3px). At low zoom, skip function nodes.
+    const skipFunctions = zl < 0.6;
+    let bestId: string | null = null;
+    let bestDist = Infinity;
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (n.x == null || n.y == null) continue;
+      if (skipFunctions && n.type === "function") continue;
+      const dx = n.x - gx;
+      const dy = n.y - gy;
+      const d2 = dx * dx + dy * dy;
+      const hit = nodeR(n) + 4;
+      if (d2 <= hit * hit && d2 < bestDist) {
+        bestDist = d2;
+        bestId = n.id;
+      }
+    }
+
+    pendingHoverIdRef.current = bestId;
+    if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current);
+    hoverDebounceRef.current = setTimeout(() => {
+      if (hoverRafRef.current != null) return;
+      hoverRafRef.current = requestAnimationFrame(() => {
+        hoverRafRef.current = null;
+        const next = pendingHoverIdRef.current;
+        if (next === undefined) return;
+        setHoveredId((cur) => (cur === next ? cur : next ?? null));
+      });
+    }, 40);
+  };
+
+  const handlePointerLeave = () => {
+    pendingHoverIdRef.current = null;
+    if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current);
+    if (hoverRafRef.current != null) cancelAnimationFrame(hoverRafRef.current);
+    hoverRafRef.current = null;
+    setHoveredId((cur) => (cur === null ? cur : null));
+  };
+
   return (
     <div className="relative h-full w-full texture-paper">
       <svg
@@ -738,6 +806,8 @@ export const CodeGraphCanvas = ({
         viewBox={`0 0 ${size.w} ${size.h}`}
         className="h-full w-full select-none"
         onClick={(e) => { if (e.target === e.currentTarget) onSelect(null); }}
+        onPointerMove={handlePointerMove}
+        onPointerLeave={handlePointerLeave}
       >
         <defs>
           {/* Soft paper shadow for nodes */}
