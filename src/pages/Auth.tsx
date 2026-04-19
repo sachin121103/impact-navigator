@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { z } from "zod";
-import { Compass, Loader2 } from "lucide-react";
+import { Compass, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,6 +13,9 @@ const credSchema = z.object({
   email: z.string().trim().email({ message: "Enter a valid email" }).max(255),
   password: z.string().min(8, { message: "At least 8 characters" }).max(72),
 });
+
+const DEMO_EMAIL = "demo@meridian.dev";
+const DEMO_PASSWORD = "MeridianDemo2026!";
 
 const Auth = () => {
   const { user, loading } = useAuth();
@@ -71,22 +74,10 @@ const Auth = () => {
     }
   };
 
-  const handleGoogle = async () => {
-    setSubmitting(true);
-    try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: { redirectTo: `${window.location.origin}/repos` },
-      });
-      if (error) throw error;
-    } catch (err) {
-      toast({
-        variant: "destructive",
-        title: "Google sign-in failed",
-        description: (err as Error).message,
-      });
-      setSubmitting(false);
-    }
+  const fillDemo = () => {
+    setMode("signin");
+    setEmail(DEMO_EMAIL);
+    setPassword(DEMO_PASSWORD);
   };
 
   return (
@@ -102,35 +93,17 @@ const Auth = () => {
         </Link>
       </header>
 
-      <main className="mx-auto max-w-md px-6 pt-12">
+      <main className="mx-auto max-w-md px-6 pt-12 pb-16">
         <h1 className="font-display text-3xl font-semibold tracking-tight">
           {mode === "signin" ? "Sign in" : "Create account"}
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">
           {mode === "signin"
-            ? "Welcome back. Your repos are private to you."
+            ? "Welcome back. Your repos stay private to you."
             : "Index private repos. Your code stays yours."}
         </p>
 
         <div className="mt-8 rounded-lg border border-border bg-card p-6 shadow-paper">
-          <Button
-            type="button"
-            variant="outline"
-            className="w-full"
-            onClick={handleGoogle}
-            disabled={submitting}
-          >
-            Continue with Google
-          </Button>
-
-          <div className="my-5 flex items-center gap-3">
-            <div className="h-px flex-1 bg-border" />
-            <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-              or with email
-            </span>
-            <div className="h-px flex-1 bg-border" />
-          </div>
-
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="email">Email</Label>
@@ -175,6 +148,38 @@ const Auth = () => {
             >
               {mode === "signin" ? "Create an account" : "Sign in"}
             </button>
+          </p>
+        </div>
+
+        <div className="mt-6 rounded-lg border border-dashed border-border bg-muted/30 p-5">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-3.5 w-3.5 text-accent" />
+            <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+              Try the demo
+            </span>
+          </div>
+          <dl className="mt-3 space-y-1 font-mono text-xs">
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">email</dt>
+              <dd className="text-foreground">{DEMO_EMAIL}</dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">password</dt>
+              <dd className="text-foreground">{DEMO_PASSWORD}</dd>
+            </div>
+          </dl>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-4 w-full"
+            onClick={fillDemo}
+            disabled={submitting}
+          >
+            Fill demo credentials
+          </Button>
+          <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+            ⚠️ Demo account is shared across visitors — don't index proprietary code under it.
           </p>
         </div>
 
