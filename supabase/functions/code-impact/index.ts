@@ -38,32 +38,69 @@ const STOPWORDS = new Set([
   "true","false","null","new","this","import","from","export","class","public","private","static",
   "include","define","struct","typedef","sizeof","break","continue","switch","case","default",
   "try","catch","throw","async","await","yield","of","in","do","unsigned","signed","long","short",
+  // Common JS/TS noise that masquerades as identifiers but rarely indicates real symbol usage
+  "console","log","warn","error","debug","info","require","module","exports",
+  "useState","useEffect","useMemo","useCallback","useRef","useContext","useReducer",
+  "Promise","Array","Object","String","Number","Boolean","Math","JSON","Date","Map","Set",
+  "parseInt","parseFloat","setTimeout","setInterval","fetch","get","set","push","pop",
+  "map","filter","reduce","forEach","slice","splice","concat","join","split","includes",
+  "length","value","name","type","id","key","data","props","state","children",
+  // Single/double-letter common temporaries
+  "i","j","k","x","y","z","a","b","c","e","el","fn","cb",
+]);
+// Identifiers that are too generic to trust without strong signals (member access).
+const COMMON_NAMES = new Set([
+  "update","render","init","setup","run","start","stop","close","open","load","save",
+  "create","delete","remove","add","find","check","handle","process","build","format",
+  "parse","validate","read","write","apply","reset","clear","next","prev","done",
+  "value","name","type","key","data","item","items","list","result","results","entry",
 ]);
 
-function extractIdentifiers(code: string): Set<string> {
+interface IdentifierHit {
+  name: string;
+  // Number of times this identifier appears in the snippet (call or member access).
+  occurrences: number;
+  // True if at least one occurrence was via member access (.foo / ::foo / ->foo)
+  // or as a call site — strongest evidence of actual usage.
+  hasCall: boolean;
+  hasMember: boolean;
+}
+
+function extractIdentifiers(code: string): Map<string, IdentifierHit> {
   // Strip strings and single/multi-line comments to reduce noise.
   const cleaned = code
     .replace(/\/\*[\s\S]*?\*\//g, " ")
     .replace(/\/\/[^\n]*/g, " ")
     .replace(/#[^\n]*/g, " ")
     .replace(/"(?:\\.|[^"\\])*"/g, " ")
-    .replace(/'(?:\\.|[^'\\])*'/g, " ");
+    .replace(/'(?:\\.|[^'\\])*'/g, " ")
+    .replace(/`(?:\\.|[^`\\])*`/g, " ");
 
-  const ids = new Set<string>();
+  const hits = new Map<string, IdentifierHit>();
+  const bump = (name: string, kind: "call" | "member") => {
+    if (name.length < 3) return;
+    if (STOPWORDS.has(name)) return;
+    const cur = hits.get(name) ?? { name, occurrences: 0, hasCall: false, hasMember: false };
+    cur.occurrences++;
+    if (kind === "call") cur.hasCall = true;
+    else cur.hasMember = true;
+    hits.set(name, cur);
+  };
+
   // Function-call-like: identifier followed by (
   const callRe = /\b([A-Za-z_][A-Za-z0-9_]{1,})\s*\(/g;
   let m: RegExpExecArray | null;
-  while ((m = callRe.exec(cleaned)) !== null) {
-    const name = m[1];
-    if (!STOPWORDS.has(name)) ids.add(name);
-  }
+  while ((m = callRe.exec(cleaned)) !== null) bump(m[1], "call");
+
   // Member-access tail: .foo or ::foo or ->foo
   const memberRe = /(?:\.|::|->)([A-Za-z_][A-Za-z0-9_]{1,})/g;
-  while ((m = memberRe.exec(cleaned)) !== null) {
-    const name = m[1];
-    if (!STOPWORDS.has(name)) ids.add(name);
-  }
-  return ids;
+  while ((m = memberRe.exec(cleaned)) !== null) bump(m[1], "member");
+
+  // JSX components: <Capitalized
+  const jsxRe = /<([A-Z][A-Za-z0-9_]*)/g;
+  while ((m = jsxRe.exec(cleaned)) !== null) bump(m[1], "call");
+
+  return hits;
 }
 
 Deno.serve(async (req) => {
