@@ -169,6 +169,8 @@ const TestPath = () => {
               selectedId={modifiedId}
               coveringTestIds={coveringIds}
               untestedIds={untestedSet}
+              coveredIds={coveredSet}
+              mode={tab === "coverage" ? "coverage" : "default"}
               onSelect={(id) => setModifiedId(id)}
             />
           </div>
