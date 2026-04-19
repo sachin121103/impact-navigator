@@ -338,6 +338,119 @@ function cFnBodies(src: string): { name: string; body: string }[] {
   return out;
 }
 
+// ---------- Java parser ----------------------------------------------------
+// Regex/brace-matching, mirrors the C++ extractor pattern. Captures classes,
+// methods (qualified Class.method), import statements, and method-body calls.
+const JAVA_RESERVED = new Set([
+  "if", "else", "for", "while", "do", "switch", "case", "default",
+  "return", "break", "continue", "throw", "throws", "try", "catch", "finally",
+  "new", "instanceof", "super", "this", "null", "true", "false",
+  "public", "private", "protected", "static", "final", "abstract", "synchronized",
+  "volatile", "transient", "native", "strictfp",
+  "class", "interface", "enum", "extends", "implements", "package", "import",
+  "void", "int", "long", "short", "byte", "float", "double", "boolean", "char",
+  "String", "Integer", "Long", "Float", "Double", "Boolean", "Object", "System",
+  "println", "print", "printf",
+  "assert", "record",
+]);
+
+const JAVA_IMPORT_RE = /^\s*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;/gm;
+const JAVA_CLASS_RE = /\b(?:public\s+|private\s+|protected\s+|static\s+|final\s+|abstract\s+)*(?:class|interface|enum|record)\s+([A-Z][\w$]*)[^{;]*\{/g;
+const JAVA_CALL_RE = /\b([A-Za-z_$][\w$]*)\s*\(/g;
+// Method declaration inside a class body. Heuristic — matches identifier(...) {
+// preceded by modifiers/return type, but skip control-flow keywords.
+const JAVA_METHOD_RE = /(?:^|[\n;{}])\s*(?:(?:public|private|protected|static|final|abstract|synchronized|native|default)\s+)*(?:<[^>]+>\s+)?[A-Za-z_$][\w$<>,.\s\[\]?]*\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?:throws\s+[\w.,\s]+)?\{/g;
+
+interface JavaParsed {
+  classes: string[];
+  methods: string[];
+  imports: string[];
+  calls: [string, string][];
+}
+
+function parseJava(rawSrc: string): JavaParsed {
+  // Reuse JS noise stripper — handles // /* */ "..." correctly. Java has no
+  // template literals so the backtick branch is dormant.
+  const src = stripJsNoise(rawSrc);
+  const out: JavaParsed = { classes: [], methods: [], imports: [], calls: [] };
+
+  let m: RegExpExecArray | null;
+  const reImp = new RegExp(JAVA_IMPORT_RE.source, "gm");
+  while ((m = reImp.exec(src)) !== null) out.imports.push(m[1]);
+
+  type Decl = { qname: string; bodyStart: number; bodyEnd: number };
+  const decls: Decl[] = [];
+
+  const reCls = new RegExp(JAVA_CLASS_RE.source, "g");
+  while ((m = reCls.exec(src)) !== null) {
+    const clsName = m[1];
+    out.classes.push(clsName);
+    const open = m.index + m[0].length - 1;
+    const close = matchBrace(src, open);
+    const body = src.slice(open + 1, close);
+
+    const reMethod = new RegExp(JAVA_METHOD_RE.source, "g");
+    let mm: RegExpExecArray | null;
+    while ((mm = reMethod.exec(body)) !== null) {
+      const mname = mm[1];
+      if (JAVA_RESERVED.has(mname)) continue;
+      if (mname === clsName) continue; // constructor — already accounted by class node
+      const localOpen = mm.index + mm[0].length - 1;
+      const absOpen = open + 1 + localOpen;
+      const absClose = matchBrace(src, absOpen);
+      decls.push({ qname: `${clsName}.${mname}`, bodyStart: absOpen, bodyEnd: absClose });
+      out.methods.push(`${clsName}.${mname}`);
+    }
+  }
+
+  decls.sort((a, b) => a.bodyStart - b.bodyStart);
+  for (const d of decls) {
+    const re = new RegExp(JAVA_CALL_RE.source, "g");
+    re.lastIndex = d.bodyStart + 1;
+    let cm: RegExpExecArray | null;
+    while ((cm = re.exec(src)) !== null) {
+      if (cm.index >= d.bodyEnd) break;
+      const callee = cm[1];
+      if (JAVA_RESERVED.has(callee)) continue;
+      let innermost = d;
+      for (const e of decls) {
+        if (e === d) continue;
+        if (e.bodyStart > d.bodyStart && e.bodyEnd <= d.bodyEnd &&
+            e.bodyStart <= cm.index && cm.index < e.bodyEnd) {
+          if (e.bodyStart > innermost.bodyStart) innermost = e;
+        }
+      }
+      if (innermost === d) out.calls.push([d.qname, callee]);
+    }
+  }
+
+  return out;
+}
+
+// Index repo .java files by simple class name (file basename) for import resolution.
+function buildJavaClassIndex(files: { path: string; content: string }[]): Map<string, string> {
+  const idx = new Map<string, string>();
+  for (const f of files) {
+    if (!f.path.toLowerCase().endsWith(".java")) continue;
+    const base = f.path.split("/").pop()!.replace(/\.java$/i, "");
+    if (!idx.has(base)) idx.set(base, f.path);
+  }
+  return idx;
+}
+
+function resolveJavaImport(spec: string, classIdx: Map<string, string>): string | null {
+  // "com.foo.bar.Artist" or static "com.foo.bar.Artist.METHOD" — walk segments
+  // right→left, return first capital-starting segment present in the index.
+  const parts = spec.split(".");
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const candidate = parts[i];
+    if (candidate && /^[A-Z]/.test(candidate) && classIdx.has(candidate)) {
+      return classIdx.get(candidate)!;
+    }
+  }
+  return null;
+}
+
 // ---------- JS / TS parser -------------------------------------------------
 const JS_RESERVED = new Set([
   "if", "else", "for", "while", "do", "switch", "case", "default",
