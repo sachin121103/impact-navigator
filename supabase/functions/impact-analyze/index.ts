@@ -69,8 +69,11 @@ Deno.serve(async (req) => {
     return json({ error: "repoUrl or repoId is required" }, 400);
   }
 
-  // Service role client kept for back-compat reads, but RLS is the source of truth.
-  const supabase = createClient(
+  // RLS-scoped client for ALL reads — enforces repo ownership/visibility.
+  const supabase = userClient;
+  // Service-role client used ONLY for the final impact_runs insert (bypasses
+  // RLS so we can persist analytics even on public repos the user can read).
+  const adminClient = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
