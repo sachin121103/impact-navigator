@@ -251,18 +251,82 @@ export function coverageMetrics(graph: GraphPayload): CoverageMetrics {
 }
 
 // ─── Dead code ────────────────────────────────────────────────────────────────
-// "Dead" = a symbol nothing else points to.
-//   - functions/classes: zero inbound edges from outside their own file
-//   - files: zero inbound import edges (and not a test file — tests are entry points)
+// "Dead" = a symbol nothing else points to. Evidence-based, not absence-based:
+// we exclude dunder methods, public-API exports, framework hooks, and
+// test-covered symbols. Methods that look like dynamic dispatch are demoted
+// to a low-confidence "likely dispatch" bucket instead of being dropped.
 export interface DeadEntry {
   node: GraphNode;
-  reason: "no callers" | "no importers" | "orphan test";
+  reason: "no callers" | "no importers" | "orphan test" | "likely-dispatch";
+}
+
+const DUNDER_RE = /^__[a-z][a-z0-9_]*__$/;
+const ENTRY_FILE_RE = /(?:^|\/)(?:setup\.py|conftest\.py|cli\.py|__main__\.py)$|(?:^|\/)bin\//i;
+const ENTRY_NAMES = new Set([
+  "main", "cli", "app", "handler", "lambda_handler",
+  "wsgi", "asgi", "application",
+]);
+const FRAMEWORK_HOOK_NAMES = new Set([
+  "setUp", "tearDown", "setUpClass", "tearDownClass",
+  "setup_method", "teardown_method", "setup_class", "teardown_class",
+  "setup_function", "teardown_function", "setup_module", "teardown_module",
+  "dispatch", "get_queryset", "form_valid", "form_invalid", "clean", "ready",
+  "handle", "lifespan",
+]);
+const FRAMEWORK_HOOK_PREFIXES = ["pytest_", "before_", "after_", "on_"];
+
+function bareName(node: GraphNode): string {
+  const n = node.name ?? "";
+  const idx = n.lastIndexOf("::");
+  return idx >= 0 ? n.slice(idx + 2) : n;
+}
+
+function isDunder(node: GraphNode): boolean {
+  return DUNDER_RE.test(bareName(node));
+}
+
+function isFrameworkHook(node: GraphNode): boolean {
+  const n = bareName(node);
+  if (FRAMEWORK_HOOK_NAMES.has(n)) return true;
+  return FRAMEWORK_HOOK_PREFIXES.some((p) => n.startsWith(p) && n.length > p.length);
+}
+
+function isEntryPoint(node: GraphNode): boolean {
+  if (ENTRY_FILE_RE.test(node.file ?? "")) return true;
+  return ENTRY_NAMES.has(bareName(node));
+}
+
+function isPublicInitExport(node: GraphNode): boolean {
+  // Symbols defined in (or re-exported from) a package __init__.py with a
+  // non-underscore name are part of the public surface.
+  const file = node.file ?? "";
+  if (!/(?:^|\/)__init__\.py$/.test(file)) return false;
+  const n = bareName(node);
+  return n.length > 0 && !n.startsWith("_");
+}
+
+function isMethod(node: GraphNode): boolean {
+  return node.type !== "file" && (node.name ?? "").includes("::");
+}
+
+function parentClassId(node: GraphNode, nodesById: Map<string, GraphNode>): string | null {
+  // qualified name like "module::Class::method" → look up "module::Class".
+  const n = node.name ?? "";
+  const idx = n.lastIndexOf("::");
+  if (idx < 0) return null;
+  const parentName = n.slice(0, idx);
+  for (const cand of nodesById.values()) {
+    if (cand.type === "class" && cand.name === parentName && cand.file === node.file) {
+      return cand.id;
+    }
+  }
+  return null;
 }
 
 export function findDeadCode(graph: GraphPayload): DeadEntry[] {
-  // Match the Code Graph algorithm: a node is "orphan/dead" if it has
-  // zero inbound edges (excluding the synthetic file→symbol "contains" links,
-  // which don't exist in our payload but we guard anyway).
+  const nodesById = indexNodes(graph.nodes);
+  const reverseAdj = buildReverseAdjacency(graph.edges);
+
   const inDegree = new Map<string, number>();
   for (const n of graph.nodes) inDegree.set(n.id, 0);
   for (const e of graph.edges) {
@@ -271,7 +335,6 @@ export function findDeadCode(graph: GraphPayload): DeadEntry[] {
       inDegree.set(e.target, (inDegree.get(e.target) ?? 0) + 1);
     }
   }
-  // Outbound count for orphan-test detection
   const outDeg = new Map<string, number>();
   for (const e of graph.edges) outDeg.set(e.source, (outDeg.get(e.source) ?? 0) + 1);
 
@@ -279,23 +342,46 @@ export function findDeadCode(graph: GraphPayload): DeadEntry[] {
   for (const n of graph.nodes) {
     const inc = inDegree.get(n.id) ?? 0;
 
-    // Tests with zero outgoing edges → they don't exercise anything.
+    // Orphan tests stay flagged — they contribute nothing to coverage.
     if (isTestNode(n) && (outDeg.get(n.id) ?? 0) === 0) {
       out.push({ node: n, reason: "orphan test" });
       continue;
     }
 
     if (n.type === "file") {
-      // Skip test files — they're entry points and shouldn't be flagged.
       if (isTestNode(n)) continue;
+      // Don't flag __init__.py — they're the package public surface.
+      if (/(?:^|\/)__init__\.py$/.test(n.file ?? "")) continue;
+      if (ENTRY_FILE_RE.test(n.file ?? "")) continue;
       if (inc === 0) out.push({ node: n, reason: "no importers" });
       continue;
     }
 
-    // function / class → flagged when nothing in the graph references them.
-    if (inc === 0) {
-      out.push({ node: n, reason: "no callers" });
+    if (inc !== 0) continue;
+
+    // ── Filters: things that *look* unused but aren't ──
+    if (isDunder(n)) continue;              // runtime-invoked
+    if (isFrameworkHook(n)) continue;       // framework-invoked by name
+    if (isEntryPoint(n)) continue;          // CLI / WSGI / etc.
+    if (isPublicInitExport(n)) continue;    // package public API
+
+    // Test-covered → alive, even if no production caller exists.
+    const tests = findCoveringTests(n.id, nodesById, reverseAdj, 6);
+    if (tests.size > 0) continue;
+
+    // Method on a class that *is* used → likely dynamic dispatch (instance.method()).
+    if (isMethod(n)) {
+      const parent = parentClassId(n, nodesById);
+      if (parent) {
+        const parentInc = inDegree.get(parent) ?? 0;
+        if (parentInc > 0) {
+          out.push({ node: n, reason: "likely-dispatch" });
+          continue;
+        }
+      }
     }
+
+    out.push({ node: n, reason: "no callers" });
   }
   return out;
 }
