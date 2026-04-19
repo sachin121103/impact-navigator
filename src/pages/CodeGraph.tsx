@@ -229,20 +229,114 @@ const CodeGraph = () => {
 
   const isEmpty = !hasLoadedRepo;
 
+  // Reset focus stack when the underlying repo changes.
+  useEffect(() => {
+    setFocusStack([]);
+  }, [data]);
+
+  // Searching auto-jumps to the symbol level so all matches are visible;
+  // clearing search restores the user's last manually picked level.
+  useEffect(() => {
+    if (search.trim()) {
+      setAbstractionLevel((prev) => (prev !== "symbol" ? "symbol" : prev));
+    } else {
+      setAbstractionLevel(lastManualLevelRef.current);
+    }
+  }, [search]);
+
+  const handleLevelChange = (lvl: AbstractionLevel) => {
+    lastManualLevelRef.current = lvl;
+    setAbstractionLevel(lvl);
+    if (lvl === "module") setFocusStack([]);
+    else if (lvl === "file") setFocusStack((s) => s.slice(0, 1));
+  };
+
+  // Apply abstraction transform to the full graph before rendering.
+  const displayData = useMemo(
+    () => applyAbstraction(data, abstractionLevel, focusStack),
+    [data, abstractionLevel, focusStack],
+  );
+
+  // Click handler that drills down through abstraction levels.
+  const handleNodeSelect = (id: string | null) => {
+    if (!id) {
+      setSelectedId(null);
+      return;
+    }
+    if (abstractionLevel === "module" && id.startsWith("module:")) {
+      const key = id.slice("module:".length);
+      lastManualLevelRef.current = "file";
+      setFocusStack([key]);
+      setAbstractionLevel("file");
+      return;
+    }
+    if (abstractionLevel === "file") {
+      const node = data.nodes.find((n) => n.id === id);
+      if (node?.type === "file") {
+        lastManualLevelRef.current = "symbol";
+        setFocusStack((prev) => [prev[0] ?? moduleKey(node.file), id]);
+        setAbstractionLevel("symbol");
+        return;
+      }
+    }
+    setSelectedId(id);
+  };
+
   // Precompute top lists for health panel
   const topBetweenness = useMemo(() => topN(metrics.betweenness, 3), [metrics]);
   const topPagerank    = useMemo(() => topN(metrics.pagerank, 3), [metrics]);
 
   const { filled: healthFilled, color: healthColor } = healthDots(metrics.stats.healthScore);
 
+  // Breadcrumb segments derived from focusStack.
+  const crumbs = useMemo(() => {
+    const out: { label: string; onClick: () => void; isLast: boolean }[] = [
+      {
+        label: "All modules",
+        onClick: () => {
+          lastManualLevelRef.current = "module";
+          setFocusStack([]);
+          setAbstractionLevel("module");
+        },
+        isLast: focusStack.length === 0,
+      },
+    ];
+    if (focusStack[0]) {
+      out.push({
+        label: focusStack[0],
+        onClick: () => {
+          lastManualLevelRef.current = "file";
+          setFocusStack([focusStack[0]]);
+          setAbstractionLevel("file");
+        },
+        isLast: focusStack.length === 1,
+      });
+    }
+    if (focusStack[1]) {
+      const fileNode = data.nodes.find((n) => n.id === focusStack[1]);
+      out.push({
+        label: fileNode?.file.split("/").pop() ?? focusStack[1],
+        onClick: () => {},
+        isLast: true,
+      });
+    }
+    return out;
+  }, [focusStack, data.nodes]);
+
+  const LEVELS: { id: AbstractionLevel; label: string }[] = [
+    { id: "module", label: "Modules" },
+    { id: "file",   label: "Files" },
+    { id: "symbol", label: "Symbols" },
+  ];
+
   return (
     <div className="relative h-screen w-full overflow-hidden texture-paper">
       {/* Canvas */}
       <div className={isEmpty ? "absolute inset-0 opacity-30" : "absolute inset-0"}>
         <CodeGraphCanvas
-          data={data}
+          data={displayData}
           selectedId={selectedId}
-          onSelect={setSelectedId}
+          onSelect={handleNodeSelect}
           search={search}
           metrics={metrics}
           analysisMode={analysisMode}
