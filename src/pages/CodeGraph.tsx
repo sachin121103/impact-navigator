@@ -15,8 +15,12 @@ import { CodeGraphCanvas, type AnalysisMode } from "@/components/CodeGraphCanvas
 import { SAMPLE_GRAPH, type GraphPayload } from "@/lib/sample-graph";
 import {
   applyAbstraction,
+  collapseLowSignalSymbols,
+  densityConfig,
   moduleKey,
+  topKSymbols,
   type AbstractionLevel,
+  type DensityLevel,
 } from "@/lib/graph-layers";
 import {
   computeAllMetrics,
@@ -96,6 +100,8 @@ const CodeGraph = () => {
   const [abstractionLevel, setAbstractionLevel] = useState<AbstractionLevel>("module");
   // focusStack[0] = module key (e.g. "src/api"), focusStack[1] = file id
   const [focusStack, setFocusStack] = useState<string[]>([]);
+  // Density slider — controls how aggressively we trim the symbol layer.
+  const [density, setDensity] = useState<DensityLevel>("balanced");
   // Remembers the user's last manually chosen level so search auto-jumping back works.
   const lastManualLevelRef = useRef<AbstractionLevel>("module");
 
