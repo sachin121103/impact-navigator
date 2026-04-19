@@ -138,6 +138,41 @@ export const TestPathCanvas = ({
         if (e.target === svgRef.current) onSelect(null);
       }}
     >
+      <defs>
+        {/* Soft glow used by the selected node + covering halos. */}
+        <filter id="tp-glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        {/* Gradient for the highlighted/path edges. */}
+        <linearGradient id="tp-edge-grad" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="hsl(var(--accent))" stopOpacity="0.2" />
+          <stop offset="50%" stopColor="hsl(var(--accent))" stopOpacity="1" />
+          <stop offset="100%" stopColor="hsl(var(--accent))" stopOpacity="0.2" />
+        </linearGradient>
+        {/* Coverage radial wash behind covered nodes. */}
+        <radialGradient id="tp-cov-wash" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="hsl(var(--accent))" stopOpacity="0.35" />
+          <stop offset="100%" stopColor="hsl(var(--accent))" stopOpacity="0" />
+        </radialGradient>
+        {/* Subtle dot grid backdrop. */}
+        <pattern id="tp-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+          <circle cx="1" cy="1" r="0.6" fill="hsl(var(--foreground))" opacity="0.06" />
+        </pattern>
+        {/* Soft vignette to ground the canvas. */}
+        <radialGradient id="tp-vignette" cx="50%" cy="50%" r="60%">
+          <stop offset="60%" stopColor="hsl(var(--background))" stopOpacity="0" />
+          <stop offset="100%" stopColor="hsl(var(--background))" stopOpacity="0.6" />
+        </radialGradient>
+      </defs>
+
+      {/* Backdrop */}
+      <rect x="0" y="0" width={W} height={H} fill="url(#tp-grid)" />
+      <rect x="0" y="0" width={W} height={H} fill="url(#tp-vignette)" />
+
       {/* edges */}
       {data.edges.map((e, i) => {
         const a = positions.get(e.source);
@@ -145,6 +180,41 @@ export const TestPathCanvas = ({
         if (!a || !b) return null;
         const hl = highlightEdges.has(i);
         const dim = !!selectedId && !hl;
+        if (hl) {
+          // Animated "data flow" along highlighted edges.
+          return (
+            <g key={i}>
+              <line
+                x1={a.x}
+                y1={a.y}
+                x2={b.x}
+                y2={b.y}
+                stroke="url(#tp-edge-grad)"
+                strokeWidth={1.6}
+                opacity={0.85}
+              />
+              <line
+                x1={a.x}
+                y1={a.y}
+                x2={b.x}
+                y2={b.y}
+                stroke="hsl(var(--accent))"
+                strokeWidth={1.4}
+                strokeLinecap="round"
+                strokeDasharray="2 8"
+                opacity={0.9}
+              >
+                <animate
+                  attributeName="stroke-dashoffset"
+                  from="0"
+                  to="-20"
+                  dur="1.2s"
+                  repeatCount="indefinite"
+                />
+              </line>
+            </g>
+          );
+        }
         return (
           <line
             key={i}
@@ -152,9 +222,9 @@ export const TestPathCanvas = ({
             y1={a.y}
             x2={b.x}
             y2={b.y}
-            stroke={hl ? "hsl(var(--accent))" : "hsl(var(--border))"}
-            strokeWidth={hl ? 1.5 : 0.6}
-            opacity={dim ? 0.08 : hl ? 0.85 : 0.45}
+            stroke="hsl(var(--border))"
+            strokeWidth={0.6}
+            opacity={dim ? 0.08 : 0.45}
           />
         );
       })}
@@ -252,22 +322,53 @@ const NodeMark = ({
       opacity={opacity}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
     >
+      {/* Coverage radial wash behind covered nodes — feels like soft light. */}
+      {mode === "coverage" && isCovered && !isSelected && (
+        <circle r={r + 14} fill="url(#tp-cov-wash)" />
+      )}
+      {/* Untested nodes throb with a destructive dashed ring. */}
       {isUntested && mode !== "coverage" && (
-        <circle r={r + 3} fill="none" stroke="hsl(var(--destructive))" strokeWidth={0.8} opacity={0.55} strokeDasharray="2 2" />
+        <circle r={r + 3} fill="none" stroke="hsl(var(--destructive))" strokeWidth={0.8} opacity={0.55} strokeDasharray="2 2">
+          <animate attributeName="r" values={`${r + 3};${r + 5};${r + 3}`} dur="2.4s" repeatCount="indefinite" />
+        </circle>
       )}
       {mode === "coverage" && isCovered && !isSelected && (
-        <circle r={r + 5} fill="hsl(var(--accent))" opacity={0.12} />
+        <circle r={r + 5} fill="hsl(var(--accent))" opacity={0.18} />
       )}
+      {/* Covering tests pulse a ring outward. */}
       {isCovering && !isSelected && (
-        <circle r={r + 4} fill="none" stroke="hsl(var(--accent))" strokeWidth={1} opacity={0.5} />
+        <>
+          <circle r={r + 4} fill="none" stroke="hsl(var(--accent))" strokeWidth={1} opacity={0.5} />
+          <circle r={r + 4} fill="none" stroke="hsl(var(--accent))" strokeWidth={1}>
+            <animate attributeName="r" values={`${r + 4};${r + 14}`} dur="1.8s" repeatCount="indefinite" />
+            <animate attributeName="opacity" values="0.55;0" dur="1.8s" repeatCount="indefinite" />
+          </circle>
+        </>
       )}
       {isNeighbor && !isSelected && (
         <circle r={r + 3} fill="none" stroke="hsl(var(--accent))" strokeWidth={1.2} opacity={0.85} />
       )}
+      {/* Selected node — soft glow + slow pulse + crisp ring. */}
+      {isSelected && (
+        <>
+          <circle r={r + 10} fill="hsl(var(--accent))" opacity={0.18} filter="url(#tp-glow)">
+            <animate attributeName="r" values={`${r + 8};${r + 14};${r + 8}`} dur="2.2s" repeatCount="indefinite" />
+            <animate attributeName="opacity" values="0.25;0.1;0.25" dur="2.2s" repeatCount="indefinite" />
+          </circle>
+          <circle r={r + 5} fill="none" stroke="hsl(var(--accent))" strokeWidth={1.2} opacity={0.9} />
+        </>
+      )}
       {node.type === "file" ? (
-        <rect x={-r} y={-r} width={r * 2} height={r * 2} fill={fill} />
+        <rect
+          x={-r}
+          y={-r}
+          width={r * 2}
+          height={r * 2}
+          fill={fill}
+          filter={isSelected ? "url(#tp-glow)" : undefined}
+        />
       ) : (
-        <circle r={r} fill={fill} />
+        <circle r={r} fill={fill} filter={isSelected ? "url(#tp-glow)" : undefined} />
       )}
       {/* Label background for emphasized labels so they're readable above edges. */}
       {emphasized && (
