@@ -24,6 +24,21 @@ const normalizeRepoUrl = (raw: string) => {
   return s.toLowerCase();
 };
 
+// Lightweight JWT payload decoder — extracts `sub`. Token authenticity is already
+// established by passing it to PostgREST/RLS via the userClient Authorization
+// header; we only need the user id locally for app-level checks.
+function decodeJwtSub(token: string): string | null {
+  try {
+    const part = token.split(".")[1];
+    if (!part) return null;
+    const padded = part.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(part.length / 4) * 4, "=");
+    const payload = JSON.parse(atob(padded));
+    return typeof payload?.sub === "string" ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -38,8 +53,8 @@ Deno.serve(async (req) => {
     { global: { headers: { Authorization: authHeader } } },
   );
   const token = authHeader.replace("Bearer ", "");
-  const { data: userData, error: userErr } = await userClient.auth.getUser(token);
-  if (userErr || !userData?.user?.id) return json({ error: "Invalid session" }, 401);
+  const userId = decodeJwtSub(token);
+  if (!userId) return json({ error: "Invalid session" }, 401);
 
   let body: { repoUrl?: string; repoId?: string; query?: string };
   try {

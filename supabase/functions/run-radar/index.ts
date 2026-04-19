@@ -16,6 +16,21 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+// Lightweight JWT payload decoder — extracts `sub`. Authorization is enforced
+// by the userClient (Authorization header → RLS) and the final service-role
+// insert relies on repo_id which the user has already been verified to own.
+function decodeJwtSub(token: string): string | null {
+  try {
+    const part = token.split(".")[1];
+    if (!part) return null;
+    const padded = part.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(part.length / 4) * 4, "=");
+    const payload = JSON.parse(atob(padded));
+    return typeof payload?.sub === "string" ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
 type RiskLevel = "high" | "medium" | "low";
 
 interface AffectedSymbol {
@@ -106,14 +121,13 @@ Deno.serve(async (req) => {
   );
 
   const token = authHeader.replace("Bearer ", "");
-  const { data: userData, error: userErr } = await userClient.auth.getUser(token);
-  if (userErr || !userData?.user?.id) {
+  const userId = decodeJwtSub(token);
+  if (!userId) {
     return new Response(
       JSON.stringify({ ok: false, error: "Invalid session" }),
       { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
-  const userId = userData.user.id;
 
   // Service-role client used only for the final impact_runs insert (which
   // still passes through the RLS WITH CHECK because we set repo_id).

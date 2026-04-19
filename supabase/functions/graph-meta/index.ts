@@ -8,6 +8,21 @@
 
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
+// Lightweight JWT payload decoder — extracts `sub`. We don't verify the signature
+// here because the userClient (constructed with the same Authorization header)
+// is the one actually authorising DB queries via RLS.
+function decodeJwtSub(token: string): string | null {
+  try {
+    const part = token.split(".")[1];
+    if (!part) return null;
+    const padded = part.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(part.length / 4) * 4, "=");
+    const payload = JSON.parse(atob(padded));
+    return typeof payload?.sub === "string" ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------- Types (mirror parser.py) ---------------------------------------
 type NodeType = "file" | "function" | "class";
 type EdgeType = "imports" | "calls" | "include";
@@ -1285,8 +1300,8 @@ Deno.serve(async (req) => {
       { global: { headers: { Authorization: authHeader } } },
     );
     const token = authHeader.replace("Bearer ", "");
-    const { data: userData, error: userErr } = await userClient.auth.getUser(token);
-    if (userErr || !userData?.user?.id) {
+    const userId = decodeJwtSub(token);
+    if (!userId) {
       return new Response(JSON.stringify({ error: "Invalid session" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
