@@ -250,12 +250,53 @@ export function coverageMetrics(graph: GraphPayload): CoverageMetrics {
   };
 }
 
-// ─── Dead tests ───────────────────────────────────────────────────────────────
-export function findDeadTests(graph: GraphPayload): GraphNode[] {
-  // Tests with zero outgoing edges → don't actually exercise anything.
+// ─── Dead code ────────────────────────────────────────────────────────────────
+// "Dead" = a symbol nothing else points to.
+//   - functions/classes: zero inbound edges from outside their own file
+//   - files: zero inbound import edges (and not a test file — tests are entry points)
+export interface DeadEntry {
+  node: GraphNode;
+  reason: "no callers" | "no importers" | "orphan test";
+}
+
+export function findDeadCode(graph: GraphPayload): DeadEntry[] {
+  // Build per-node inbound edges with source file info.
+  const inbound = new Map<string, { source: string; sourceFile: string }[]>();
+  const nodesById = indexNodes(graph.nodes);
+  for (const e of graph.edges) {
+    const srcNode = nodesById.get(e.source);
+    const list = inbound.get(e.target) ?? [];
+    list.push({ source: e.source, sourceFile: srcNode?.file ?? "" });
+    inbound.set(e.target, list);
+  }
+  // Outbound count for orphan-test detection
   const outDeg = new Map<string, number>();
   for (const e of graph.edges) outDeg.set(e.source, (outDeg.get(e.source) ?? 0) + 1);
-  return graph.nodes.filter((n) => isTestNode(n) && (outDeg.get(n.id) ?? 0) === 0);
+
+  const out: DeadEntry[] = [];
+  for (const n of graph.nodes) {
+    const inc = inbound.get(n.id) ?? [];
+
+    // Tests with zero outgoing edges → they don't exercise anything.
+    if (isTestNode(n) && (outDeg.get(n.id) ?? 0) === 0) {
+      out.push({ node: n, reason: "orphan test" });
+      continue;
+    }
+
+    if (n.type === "file") {
+      // Skip test files — they're entry points and shouldn't be flagged for "no importers".
+      if (isTestNode(n)) continue;
+      if (inc.length === 0) out.push({ node: n, reason: "no importers" });
+      continue;
+    }
+
+    // function / class → look for callers OUTSIDE its own file.
+    const externalCallers = inc.filter((i) => i.sourceFile !== n.file);
+    if (externalCallers.length === 0) {
+      out.push({ node: n, reason: "no callers" });
+    }
+  }
+  return out;
 }
 
 // ─── Exporters ────────────────────────────────────────────────────────────────
