@@ -1,50 +1,85 @@
 
 
-## Why the graph looks like garbage on `resile`
+## Why TestPath finds "dead" functions in psf/requests
 
-`resile` is a Lovable-style React/TS repo: ~50 shadcn UI files in `src/components/ui/*`, big page components with heavy hooks/JSX, a single commit, and very few real cross-file imports outside `@/components/ui/*`. The current TS/JS parser was built around Python-style call graphs and falls over on this shape:
+Let me read the TestPath logic to understand the dead-function detection.
+<lov-tool-use id="toolu_vrtx_01WFjphZaqFPzvTpCmFr1yLb" name="code--view" integration-id="code" data="{\"file_path\": \"src/lib/testpath.ts\"}">
+</lov-tool-use>
 
-1. **shadcn boilerplate dominates** — ~50 `src/components/ui/*` files are kept as nodes but barely connect to anything, producing a big disconnected island.
-2. **JSX is invisible** — `<Button />` / `<Card>…</Card>` are not parsed as edges, so the *real* component dependencies don't show up.
-3. **Call regex catches everything that looks like `Ident(…)`** — `useState()`, `useMemo()`, `cn()`, `z.string()`, even types — and resolves callees by *bare name* against `fnIndex`. With many same-named helpers across files, calls resolve to the wrong file → fake spaghetti.
-4. **Path-alias `@/…` imports aren't resolved** — `resolveJsImport` only handles relative `./`. So 90% of imports in a Lovable repo (`import { Button } from "@/components/ui/button"`) silently produce zero edges.
-5. **Generated/config files included** — `tailwind.config.ts`, `vite.config.ts`, `src/integrations/supabase/types.ts`, `src/hooks/use-*` add visual noise without structure.
-6. **No churn data** — single-commit repo → all file dots grey/uniform → the layout reads as a flat blob.
+<lov-tool-use id="toolu_vrtx_01JR12KgfHk1n3z6zE4YnsEY" name="code--view" integration-id="code" data="{\"file_path\": \"src/pages/TestPath.tsx\"}">
+</lov-tool-use>
 
-## Fix (scoped to `supabase/functions/graph-meta/index.ts`)
+<lov-tool-use id="toolu_vrtx_01NsVbjS2Fu47TzirX43fLHT" name="code--view" integration-id="code" data="{\"file_path\": \"src/lib/testpath.ts\"}">
+</lov-tool-use>
 
-Five small, targeted changes — no UI work, no schema changes.
+<lov-tool-use id="toolu_vrtx_01R9uevwcbEqQqHfdzfXoXHm" name="code--view" integration-id="code" data="{\"file_path\": \"src/pages/TestPath.tsx\"}">
+</lov-tool-use>
+I have enough context. The dead code detection in `findDeadCode` is naive: it flags ANY function with zero inbound graph edges as "no callers". For Python repos like `psf/requests`, this misses tons of real usage:
 
-### 1. Resolve `@/…` and `~/…` path aliases
-In `resolveJsImport`, if the spec starts with `@/` or `~/`, rewrite to `src/<rest>` (and try both `src/` and project-root) before walking extensions/index files. Detect alias prefix from `tsconfig.json` / `vite.config.ts` if present; fall back to `src/`.
-**Effect**: connects the entire app — pages → components → ui primitives.
+1. **Public API exports** — `requests.get`, `requests.post`, etc. are called by external users, not internal code. Zero inbound edges in the graph ≠ dead.
+2. **Methods called via instance/duck typing** — `session.get()`, `response.json()` — the parser likely doesn't resolve these to the class method symbol.
+3. **Magic methods** — `__init__`, `__enter__`, `__exit__`, `__repr__`, `__getattr__`, etc. are called by Python itself, never appear as explicit callees in the graph.
+4. **Decorators / hooks / overrides** — `@property`, `@classmethod`, fixture functions, `setUp`/`tearDown` — invoked by frameworks, not by name.
+5. **Re-exports in `__init__.py`** — symbols imported and re-exposed but never "called" inside the repo.
+6. **Same-file calls invisible** — current parser may emit inbound edges only across files; intra-file callers don't count if `parseJs`/`parsePy` skips them.
 
-### 2. Capture JSX usage as `calls` edges
-In `parseJs`, after `stripJsNoise`, scan for `<Capitalized` tag opens (excluding HTML tags via lowercase rule + a small allowlist of known DOM tags). Emit one `(containingFn → ComponentName)` per occurrence. Resolve via the import map built from this file's imports (spec → resolved file → that file's exported component name) — *not* via the global `fnIndex`.
-**Effect**: real component dependency graph appears.
+<lov-plan>
 
-### 3. Resolve calls through the per-file import map, not bare-name guess
-Build `importBindings: Map<localName, resolvedFilePath>` per file from the parsed `import { X, Y as Z } from "..."` specs. When emitting a call edge for callee `X`, prefer `importBindings[X]` → that file's `X` symbol. Only fall back to global `fnIndex[bare]` when nothing imports it (prevents wrong-file wiring).
-**Effect**: kills the fake cross-file edges that make things look incoherent.
+## Why TestPath flags so many "dead" functions on `psf/requests`
 
-### 4. Filter React/JSX noise from `JS_CALL_RE` matches
-Extend `JS_RESERVED` with: `useState`, `useEffect`, `useMemo`, `useCallback`, `useRef`, `useContext`, `useReducer`, `useLayoutEffect`, `useImperativeHandle`, `useId`, `useTransition`, `useDeferredValue`, `useSyncExternalStore`, `forwardRef`, `memo`, `lazy`, `Suspense`, `Fragment`, `cn`, `clsx`, `twMerge`, `cva`, `z`, `Object`, `Array`, `Number`, `String`, `JSON`, `Math`, `Promise`, `Date`, `Boolean`, `Error`, `Symbol`, `Map`, `Set`, `WeakMap`, `WeakSet`, `parseInt`, `parseFloat`, `Number`, `Boolean`, `Array`, `Object`, plus type-only call shapes like `useToast` / `useNavigate` if you want to keep router noise out.
-**Effect**: cuts ~80% of phantom calls in TS repos.
+`findDeadCode()` (in `src/lib/testpath.ts`) marks any function/class with **zero inbound graph edges** as dead. That's far too aggressive for a real library — especially a Python one like `requests` — because the dependency graph cannot see several legitimate callers:
 
-### 5. Skip generated / config noise
-Add to `SKIP_DIRS`: `src/components/ui`, `src/integrations`, `supabase` (the user's *own* `supabase/` folder when they map a Lovable app — it's generated edge-function glue from the user's perspective), `src/hooks` only when files match `use-toast|use-mobile` (allowlist by name, not a blanket dir skip).
-Add to per-file skip in `shouldSkip`: `tailwind.config.*`, `postcss.config.*`, `vite.config.*`, `eslint.config.*`, `*.config.{js,ts,mjs,cjs}`.
-**Effect**: removes ~70 boilerplate file nodes; remaining graph reads as the actual app.
+1. **Public API surface** — `requests.get/post/put/delete/...`, `Session.request`, etc. are called by *consumers of the library*, not by code inside the repo. Zero internal callers ≠ unused.
+2. **Dunder / magic methods** — `__init__`, `__enter__`, `__exit__`, `__iter__`, `__repr__`, `__getattr__`, `__call__`, `__del__` are invoked by the Python runtime itself, never as explicit calls in source.
+3. **Method dispatch** — calls like `session.get(...)` or `response.json()` don't resolve to a specific class method in the graph (the parser only knows the bare name "get", which collides), so the inbound edge is dropped or misrouted.
+4. **Framework / decorator hooks** — `@property`, `@classmethod`, pytest fixtures, `setUp`/`tearDown`, `urllib3` adapter overrides — invoked by name from outside, not by direct call sites.
+5. **Re-exports** — symbols imported into `requests/__init__.py` and re-exposed are "imported but not called" → flagged.
+6. **Test-only callers excluded** — if a function is only exercised by tests, that should make it *covered*, not *dead*.
 
-### 6. (Tiny UI nudge) Show *why* it's sparse when no churn
-In `CodeGraph.tsx`, when `meta.parsed_file_count > 0` and every node has `churn_score === 0`, render a one-line hint under the search bar: `Single-commit repo — heatmap disabled.` so users know it's not broken.
+## Fix — make `findDeadCode` evidence-based, not absence-based
+
+Scoped to **`src/lib/testpath.ts`** (one file, no edge-function or schema changes).
+
+### 1. Skip dunder methods entirely
+Bail before flagging when `node.name` matches `/^__[a-z]+__$/` (or ends with `::__name__`). These are runtime-invoked.
+
+### 2. Treat public-API symbols as "exported, not dead"
+A function is considered **public** when any of:
+- File ends in `__init__.py` and the symbol name doesn't start with `_`.
+- The symbol is referenced by an `imports` edge from another file inside the repo (re-export).
+- File is `setup.py`, `conftest.py`, `cli.py`, `__main__.py`, or in a `bin/` folder.
+- Name is in a small allowlist of conventional entry points (`main`, `cli`, `app`, `handler`, `lambda_handler`, `wsgi`, `asgi`, `application`).
+
+Public symbols never appear in the dead list.
+
+### 3. Treat test-covered functions as alive
+Reuse `findCoveringTests`. If any test reaches a symbol via reverse-BFS, it is **not** dead — even if no production code calls it. (Currently coverage and dead-code lists overlap, which is the worst of both worlds.)
+
+### 4. Down-rank methods (don't drop, but mark "likely dispatch")
+For symbols whose qualified name contains `::` AND whose parent class has any inbound edges, classify the method as `likely-dispatch` rather than dead. Render it in a separate, smaller "low confidence" section (or hide behind a toggle), since `instance.method()` calls aren't resolved by the parser.
+
+### 5. Skip framework hook names
+Allowlist of common hook names that are called by frameworks/runtimes by introspection: `setUp`, `tearDown`, `setUpClass`, `tearDownClass`, `setup_method`, `teardown_method`, `pytest_*`, `before_*`, `after_*`, `on_*` (event handlers), `dispatch`, `get_queryset`, `form_valid`, `clean`, `ready`, `handle` (Django mgmt), `lifespan`. Match by exact name or prefix.
+
+### 6. Update the new `DeadEntry.reason` set
+Add `"likely-dispatch"` so the UI can label the soft section. No new shape changes — `reason` stays a string.
+
+### 7. Tiny UI nudge (`src/pages/TestPath.tsx`)
+- Split the dead list into two sections: **`Dead`** (high-confidence) and **`Possibly unused`** (`likely-dispatch` only), collapsed by default.
+- Update the helper copy under the Dead tab from "Functions or classes that nothing else calls from outside their own file" to: "Functions with no callers, no tests, and no exports. Public APIs and dunder methods are excluded."
+
+## Expected impact on `requests`
+- All `__init__.py` re-exports of `get/post/put/delete/...` → no longer flagged.
+- `Session.__enter__/__exit__/__repr__` and similar → no longer flagged.
+- `Response.iter_content/iter_lines` (called via instance) → moved to "Possibly unused" rather than "Dead".
+- The remaining list should be small and actually actionable.
 
 ## Files touched
-- `supabase/functions/graph-meta/index.ts` — items 1–5
-- `src/pages/CodeGraph.tsx` — item 6 (one tiny hint banner)
+- `src/lib/testpath.ts` — items 1–6
+- `src/pages/TestPath.tsx` — item 7 (split list + copy tweak)
 
 ## Out of scope
-- Real TS AST parsing (would need swc/oxc — heavy)
-- Type-aware import resolution from `tsconfig.json` paths beyond `@/`
-- Dedicated React component layer (could be a follow-up: collapse JSX into a "uses component" edge type)
+- Real method-resolution (would need type inference or a Python AST pass)
+- Cross-package usage analysis (PyPI consumers)
+- Rewriting the indexer to emit `dispatch` edges
 
