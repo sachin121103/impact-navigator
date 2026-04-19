@@ -128,8 +128,7 @@ export const CodeImpactPanel = ({ repoUrl }: { repoUrl: string }) => {
                 No identifiers in your snippet matched any indexed symbol. Try pasting code from this repo.
               </div>
             ) : (
-              <></>
-
+              <>
                 <div className="rounded-md border border-border bg-background overflow-hidden">
                   <div className="px-3 py-1.5 border-b border-border text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
                     matched in repo
