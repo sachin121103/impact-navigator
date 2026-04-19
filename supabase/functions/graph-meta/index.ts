@@ -134,6 +134,8 @@ async function readTarGz(
   }
 
   const out: { path: string; content: string }[] = [];
+  const skippedExt: Record<string, number> = {};
+  let totalCandidate = 0;
   let pos = 0;
   let longName: string | null = null;
   const td = new TextDecoder("utf-8", { fatal: false });
@@ -174,14 +176,20 @@ async function readTarGz(
     const rel = name.split("/").slice(1).join("/");
     if (!rel || rel.endsWith("/")) continue;
     if (shouldSkip(rel)) continue;
+    totalCandidate++;
     const dot = rel.lastIndexOf(".");
     const ext = dot >= 0 ? rel.slice(dot).toLowerCase() : "";
-    if (!KEEP_EXT.has(ext)) continue;
+    if (!KEEP_EXT.has(ext)) {
+      if (REPORTABLE_SKIPPED.has(ext)) {
+        skippedExt[ext] = (skippedExt[ext] ?? 0) + 1;
+      }
+      continue;
+    }
 
     out.push({ path: rel, content: td.decode(data) });
     if (out.length >= maxFiles) break;
   }
-  return out;
+  return { files: out, skippedExt, totalCandidate };
 }
 
 // ---------- Python parser (regex-based; AST not available in Deno) ---------
