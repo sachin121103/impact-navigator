@@ -92,7 +92,7 @@ const TestPath = () => {
     () => new Set(coverage.untestedNodeIds),
     [coverage],
   );
-  const deadTests = useMemo(() => findDeadTests(data), [data]);
+  const dead = useMemo(() => findDeadCode(data), [data]);
 
   const prPlan = useMemo(() => {
     const files = prFiles
