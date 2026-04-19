@@ -1137,33 +1137,64 @@ export const CodeGraphCanvas = ({
                         style={{ pointerEvents: "none", userSelect: "none" }}
                       >⚠</text>
                     )}
-                    {/* Label with background pill */}
-                    {labelVisible && (
-                      <g style={{ pointerEvents: "none", transition: "opacity 200ms" }}>
-                        <rect
-                          x={r + 3}
-                          y={-fontSize / 2 - 2}
-                          width={labelW}
-                          height={fontSize + 4}
-                          rx={3}
-                          ry={3}
-                          fill={PAPER_BG}
-                          fillOpacity={isActive ? 0.95 : 0.85}
-                        />
-                        <text
-                          x={r + 5}
-                          y={4}
-                          fontSize={fontSize}
-                          fontFamily="var(--font-mono)"
-                          fontWeight={isActive ? 600 : 400}
-                          fill={isActive ? GLASS_TEXT : "hsl(25,12%,28%)"}
-                          opacity={isActive ? 1 : 0.78}
-                          style={{ userSelect: "none" }}
-                        >
-                          {labelText}
-                        </text>
-                      </g>
-                    )}
+                  </g>
+                );
+              });
+            })()}
+          </g>
+
+          <g pointerEvents="none">
+            {(() => {
+              const heavy = nodes.length > HEAVY_NODE_COUNT;
+              const veryHeavy = nodes.length > VERY_HEAVY_NODE_COUNT;
+              return nodes.map((n) => {
+                const r = analysisRadius(n, analysisMode, metrics);
+                const isSelected = selectedId === n.id;
+                const isHovered = hoveredId === n.id;
+                const isActive = isSelected || isHovered;
+                const isDim = finalHighlight ? !finalHighlight.has(n.id) : false;
+                const focusHide = focusMode && finalHighlight && isDim;
+                const nodeOpacity = focusHide ? 0.05 : isDim ? 0.15 : 1;
+                const labelVisible = visibleLabelIds.has(n.id);
+                if (!labelVisible) return null;
+                const labelText = n.type === "file" ? (n.file.split("/").pop() ?? n.name) : n.name;
+                const fontSize = isActive ? 10.5 : n.type === "file" ? 9 : 8;
+                const labelW = labelText.length * fontSize * 0.58 + 8;
+                const _showAnimatedRings = !veryHeavy || isActive;
+                const _nodeFilter = isActive ? "url(#node-shadow-active)" : heavy ? undefined : "url(#node-shadow)";
+                void _showAnimatedRings;
+                void _nodeFilter;
+                return (
+                  <g
+                    key={`label-${n.id}`}
+                    ref={(el) => {
+                      if (el) labelRefs.current.set(n.id, el as SVGGElement);
+                      else labelRefs.current.delete(n.id);
+                    }}
+                    style={{ opacity: nodeOpacity, transition: "opacity 200ms" }}
+                  >
+                    <rect
+                      x={r + 3}
+                      y={-fontSize / 2 - 2}
+                      width={labelW}
+                      height={fontSize + 4}
+                      rx={3}
+                      ry={3}
+                      fill={PAPER_BG}
+                      fillOpacity={isActive ? 0.95 : 0.85}
+                    />
+                    <text
+                      x={r + 5}
+                      y={4}
+                      fontSize={fontSize}
+                      fontFamily="var(--font-mono)"
+                      fontWeight={isActive ? 600 : 400}
+                      fill={isActive ? GLASS_TEXT : "hsl(25,12%,28%)"}
+                      opacity={isActive ? 1 : 0.78}
+                      style={{ userSelect: "none" }}
+                    >
+                      {labelText}
+                    </text>
                   </g>
                 );
               });
