@@ -520,6 +520,43 @@ const CodeGraph = () => {
               })}
             </div>
           </div>
+          {abstractionLevel === "symbol" && !focusStack[1] && !search.trim() && (
+            <div className="flex items-center gap-2 rounded-full border px-3 py-1 shadow-paper font-mono text-[10px]" style={GLASS}>
+              <span style={{ color: T.dim }}>Density</span>
+              <div className="flex items-center gap-0.5">
+                {(["essential", "balanced", "all"] as DensityLevel[]).map((d) => {
+                  const active = density === d;
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => setDensity(d)}
+                      className="rounded-full px-2 py-0.5 transition-all"
+                      style={{
+                        background: active ? "rgba(160,138,110,0.18)" : "transparent",
+                        color: active ? T.ink : T.muted,
+                        fontWeight: active ? 600 : 400,
+                      }}
+                      title={
+                        d === "essential" ? "Top ~50 most important functions"
+                        : d === "balanced" ? "Top ~100 + cross-file callers"
+                        : "Show every function (slow on big repos)"
+                      }
+                    >
+                      {d}
+                    </button>
+                  );
+                })}
+              </div>
+              {visibleSymbolCount < totalSymbolCount && (
+                <span
+                  style={{ color: T.muted }}
+                  title="Hidden functions are still searchable — type a name to reveal."
+                >
+                  · {visibleSymbolCount}/{totalSymbolCount} fns
+                </span>
+              )}
+            </div>
+          )}
           {focusStack.length > 0 && (
             <div className="flex items-center gap-1.5 rounded-full border px-3 py-1 shadow-paper font-mono text-[10px]" style={GLASS}>
               {crumbs.map((c, i) => (
