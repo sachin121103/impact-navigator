@@ -94,6 +94,11 @@ const CodeGraph = () => {
   } | null>(null);
   const [hasLoadedRepo, setHasLoadedRepo] = useState(false);
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("none");
+  const [abstractionLevel, setAbstractionLevel] = useState<AbstractionLevel>("module");
+  // focusStack[0] = module key (e.g. "src/api"), focusStack[1] = file id
+  const [focusStack, setFocusStack] = useState<string[]>([]);
+  // Remembers the user's last manually chosen level so search auto-jumping back works.
+  const lastManualLevelRef = useRef<AbstractionLevel>("module");
 
   // Heavy metrics computed off the main thread via Web Worker.
   // Falls back to inline compute if Worker unavailable (e.g. SSR).
