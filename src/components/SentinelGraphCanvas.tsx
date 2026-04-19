@@ -99,6 +99,33 @@ export const SentinelGraphCanvas = ({
 
   const selectedPos = selectedId ? positions.get(selectedId) : null;
 
+  // Group edges by kind into one path string per kind — drastically cuts SVG DOM.
+  const edgePaths = useMemo(() => {
+    const byKind: Record<string, string> = { calls: "", imports: "", covers: "" };
+    for (const e of graph.edges) {
+      const a = positions.get(e.from);
+      const b = positions.get(e.to);
+      if (!a || !b) continue;
+      byKind[e.kind] = (byKind[e.kind] ?? "") +
+        `M${a.x.toFixed(1)},${a.y.toFixed(1)}L${b.x.toFixed(1)},${b.y.toFixed(1)}`;
+    }
+    return byKind;
+  }, [graph, positions]);
+
+  // Highlight overlay for blast-radius edges only.
+  const highlightPath = useMemo(() => {
+    if (!selectedId) return "";
+    let d = "";
+    for (const e of graph.edges) {
+      if (!blast.has(e.from) || !blast.has(e.to)) continue;
+      const a = positions.get(e.from);
+      const b = positions.get(e.to);
+      if (!a || !b) continue;
+      d += `M${a.x.toFixed(1)},${a.y.toFixed(1)}L${b.x.toFixed(1)},${b.y.toFixed(1)}`;
+    }
+    return d;
+  }, [selectedId, blast, graph, positions]);
+
   return (
     <svg
       viewBox={`0 0 ${W} ${H}`}
@@ -115,62 +142,61 @@ export const SentinelGraphCanvas = ({
         </filter>
       </defs>
 
-      {/* Edges */}
-      <g>
-        {graph.edges.map((e, i) => {
-          const a = positions.get(e.from);
-          const b = positions.get(e.to);
-          if (!a || !b) return null;
-          const inBlast =
-            selectedId && blast.has(e.from) && blast.has(e.to);
-          const dim = selectedId && !inBlast;
-          const stroke =
-            e.kind === "covers"
-              ? "hsl(var(--accent))"
-              : "hsl(var(--border))";
-          const dash =
-            e.kind === "calls" ? "4 3" : e.kind === "covers" ? "1 4" : undefined;
-          return (
-            <line
-              key={i}
-              x1={a.x}
-              y1={a.y}
-              x2={b.x}
-              y2={b.y}
-              stroke={stroke}
-              strokeWidth={inBlast ? 1.6 : 0.8}
-              strokeDasharray={dash}
-              opacity={dim ? 0.12 : inBlast ? 0.9 : 0.45}
-            />
-          );
-        })}
+      {/* Edges — one <path> per kind */}
+      <g style={{ willChange: "opacity" }}>
+        <path
+          d={edgePaths.calls}
+          fill="none"
+          stroke="hsl(var(--border))"
+          strokeWidth={0.8}
+          strokeDasharray="4 3"
+          opacity={selectedId ? 0.12 : 0.45}
+          pointerEvents="none"
+        />
+        <path
+          d={edgePaths.imports}
+          fill="none"
+          stroke="hsl(var(--border))"
+          strokeWidth={0.8}
+          opacity={selectedId ? 0.12 : 0.45}
+          pointerEvents="none"
+        />
+        <path
+          d={edgePaths.covers}
+          fill="none"
+          stroke="hsl(var(--accent))"
+          strokeWidth={0.8}
+          strokeDasharray="1 4"
+          opacity={selectedId ? 0.12 : 0.45}
+          pointerEvents="none"
+        />
+        {/* Blast overlay */}
+        <path
+          d={highlightPath}
+          fill="none"
+          stroke="hsl(var(--accent))"
+          strokeWidth={1.6}
+          opacity={selectedId ? 0.9 : 0}
+          pointerEvents="none"
+        />
       </g>
 
-      {/* Ripple rings */}
+      {/* Single ripple ring (was 3) */}
       <AnimatePresence>
         {selectedPos && (
-          <>
-            {[0, 1, 2].map((i) => (
-              <motion.circle
-                key={`ripple-${selectedId}-${i}`}
-                cx={selectedPos.x}
-                cy={selectedPos.y}
-                r={14}
-                fill="none"
-                stroke="hsl(var(--accent))"
-                strokeWidth={1.2}
-                initial={{ scale: 0.4, opacity: 0.6 }}
-                animate={{ scale: 4 + i, opacity: 0 }}
-                transition={{
-                  duration: 1.6,
-                  delay: i * 0.35,
-                  repeat: Infinity,
-                  ease: "easeOut",
-                }}
-                style={{ transformOrigin: `${selectedPos.x}px ${selectedPos.y}px` }}
-              />
-            ))}
-          </>
+          <motion.circle
+            key={`ripple-${selectedId}`}
+            cx={selectedPos.x}
+            cy={selectedPos.y}
+            r={14}
+            fill="none"
+            stroke="hsl(var(--accent))"
+            strokeWidth={1.2}
+            initial={{ scale: 0.4, opacity: 0.6 }}
+            animate={{ scale: 5, opacity: 0 }}
+            transition={{ duration: 1.8, repeat: Infinity, ease: "easeOut" }}
+            style={{ transformOrigin: `${selectedPos.x}px ${selectedPos.y}px` }}
+          />
         )}
       </AnimatePresence>
 
@@ -187,6 +213,8 @@ export const SentinelGraphCanvas = ({
           const r = n.kind === "file" ? 11 : n.kind === "test" ? 10 : 7;
           const fill = nodeFill(n);
           const showDead = (deadCodeMode || isDead) && isDead;
+          // Above 150 nodes: drop the animated dead-glow filter, use static stroke.
+          const useGlow = !heavy && graph.nodes.length <= 150;
 
           return (
             <motion.g
@@ -204,17 +232,7 @@ export const SentinelGraphCanvas = ({
               }}
             >
               {showDead && (
-                heavy ? (
-                  <circle
-                    cx={p.x}
-                    cy={p.y}
-                    r={r + 6}
-                    fill="none"
-                    stroke="hsl(0 75% 55%)"
-                    strokeWidth={1.4}
-                    opacity={0.7}
-                  />
-                ) : (
+                useGlow ? (
                   <motion.circle
                     cx={p.x}
                     cy={p.y}
@@ -225,6 +243,16 @@ export const SentinelGraphCanvas = ({
                     filter="url(#deadGlow)"
                     animate={{ opacity: [0.3, 0.85, 0.3] }}
                     transition={{ duration: 2.2, repeat: Infinity }}
+                  />
+                ) : (
+                  <circle
+                    cx={p.x}
+                    cy={p.y}
+                    r={r + 6}
+                    fill="none"
+                    stroke="hsl(0 75% 55%)"
+                    strokeWidth={1.4}
+                    opacity={0.7}
                   />
                 )
               )}
@@ -259,18 +287,21 @@ export const SentinelGraphCanvas = ({
                   strokeWidth={isDead ? 1.8 : 1}
                 />
               )}
-              <text
-                x={p.x}
-                y={p.y + r + 11}
-                textAnchor="middle"
-                fontSize={9}
-                fontFamily="ui-monospace, monospace"
-                fill="hsl(var(--foreground))"
-                opacity={0.75}
-                pointerEvents="none"
-              >
-                {n.label}
-              </text>
+              {/* Hide labels at high node counts unless selected/blast */}
+              {(!heavy || isSelected || inBlast) && (
+                <text
+                  x={p.x}
+                  y={p.y + r + 11}
+                  textAnchor="middle"
+                  fontSize={9}
+                  fontFamily="ui-monospace, monospace"
+                  fill="hsl(var(--foreground))"
+                  opacity={0.75}
+                  pointerEvents="none"
+                >
+                  {n.label}
+                </text>
+              )}
             </motion.g>
           );
         })}

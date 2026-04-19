@@ -152,9 +152,18 @@ export const CodeGraphCanvas = ({
   const simRef = useRef<Simulation<SimNode, SimLink> | null>(null);
   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const nodeRefs = useRef<Map<string, SVGGElement>>(new Map());
-  const linkRefs = useRef<Map<string, SVGLineElement>>(new Map());
+  // One <path> per edge style — bulk geometry. Hover overlay is separate.
+  const edgePathRefs = useRef<Map<EdgeType, SVGPathElement>>(new Map());
+  const edgeOverlayRef = useRef<SVGPathElement | null>(null);
   const zoneRectRefs = useRef<Map<string, SVGRectElement>>(new Map());
   const zoneLabelRefs = useRef<Map<string, SVGGElement>>(new Map());
+  // Pan/zoom transform for viewport culling.
+  const transformRef = useRef<{ k: number; x: number; y: number }>({ k: 1, x: 0, y: 0 });
+  // Track which nodes are off-screen (for culling).
+  const culledRef = useRef<Set<string>>(new Set());
+  // Active highlight set, kept in a ref so the tick loop can rebuild the overlay
+  // path without re-subscribing to the simulation.
+  const highlightRef = useRef<Set<string> | null>(null);
 
   const [size, setSize] = useState({ w: 800, h: 640 });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -286,8 +295,19 @@ export const CodeGraphCanvas = ({
     const zoneMembersByKey = new Map<string, SimNode[]>();
     for (const z of zoneList) zoneMembersByKey.set(z.key, z.members);
 
+    // Pre-bucket links by type so we can build one path per type per tick.
+    const linksByType = new Map<EdgeType, SimLink[]>();
+    for (const l of links) {
+      const arr = linksByType.get(l.type);
+      if (arr) arr.push(l);
+      else linksByType.set(l.type, [l]);
+    }
+
     let lastZone = 0;
+    let lastCull = 0;
+    let tickCounter = 0;
     let settledTimer: ReturnType<typeof setTimeout> | null = null;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
     const updateZoneRects = () => {
       if (!showZones) return;
@@ -319,17 +339,43 @@ export const CodeGraphCanvas = ({
       }
     };
 
-    sim.on("tick", () => {
+    // Compute viewport-cull set using current pan/zoom transform.
+    const updateCulling = () => {
+      const culled = culledRef.current;
+      const t = transformRef.current;
+      // Convert screen viewport to graph coords: graphX = (screenX - tx) / k
+      const k = t.k || 1;
+      const margin = 80; // px buffer in screen space
+      const x0 = (-t.x - margin) / k;
+      const y0 = (-t.y - margin) / k;
+      const x1 = (size.w - t.x + margin) / k;
+      const y1 = (size.h - t.y + margin) / k;
+      const next = new Set<string>();
       for (const n of nodes) {
-        if (n.x == null) continue;
-        nodeRefs.current
-          .get(n.id)
-          ?.setAttribute("transform", `translate(${n.x},${n.y})`);
+        if (n.x == null || n.y == null) continue;
+        if (n.x < x0 || n.x > x1 || n.y < y0 || n.y > y1) next.add(n.id);
       }
-      for (let i = 0; i < links.length; i++) {
-        const el = linkRefs.current.get(String(i));
-        if (!el) continue;
-        const l = links[i];
+      // Diff-apply display:none.
+      for (const id of next) {
+        if (!culled.has(id)) {
+          const el = nodeRefs.current.get(id);
+          if (el) el.style.display = "none";
+        }
+      }
+      for (const id of culled) {
+        if (!next.has(id)) {
+          const el = nodeRefs.current.get(id);
+          if (el) el.style.display = "";
+        }
+      }
+      culledRef.current = next;
+    };
+
+    const buildEdgePath = (arr: SimLink[]) => {
+      // Simple line segments concatenated into one path.
+      let d = "";
+      for (let i = 0; i < arr.length; i++) {
+        const l = arr[i];
         const s = l.source as SimNode;
         const t = l.target as SimNode;
         if (s.x == null || t.x == null) continue;
@@ -337,15 +383,67 @@ export const CodeGraphCanvas = ({
         const dy = t.y - s.y;
         const dist = Math.sqrt(dx * dx + dy * dy) || 1;
         const tr = l.type === "contains" ? 0 : nodeR(t) + 2;
-        el.setAttribute("x1", String(s.x));
-        el.setAttribute("y1", String(s.y));
-        el.setAttribute("x2", String(t.x - (dx / dist) * tr));
-        el.setAttribute("y2", String(t.y - (dy / dist) * tr));
+        const tx = t.x - (dx / dist) * tr;
+        const ty = t.y - (dy / dist) * tr;
+        d += `M${s.x.toFixed(1)},${s.y.toFixed(1)}L${tx.toFixed(1)},${ty.toFixed(1)}`;
       }
+      return d;
+    };
+
+    const updateEdgePaths = () => {
+      const skipContains = nodes.length > 1000;
+      for (const [type, arr] of linksByType) {
+        if (type === "contains" && skipContains) continue;
+        const el = edgePathRefs.current.get(type);
+        if (!el) continue;
+        el.setAttribute("d", buildEdgePath(arr));
+      }
+      // Highlight overlay
+      const overlay = edgeOverlayRef.current;
+      if (overlay) {
+        const hl = highlightRef.current;
+        if (!hl) {
+          overlay.setAttribute("d", "");
+        } else {
+          let d = "";
+          for (const l of links) {
+            const s = l.source as SimNode;
+            const t = l.target as SimNode;
+            if (s.x == null || t.x == null) continue;
+            if (!hl.has(s.id) || !hl.has(t.id)) continue;
+            if (l.type === "contains") continue;
+            const dx = t.x - s.x;
+            const dy = t.y - s.y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            const tr = nodeR(t) + 2;
+            const tx = t.x - (dx / dist) * tr;
+            const ty = t.y - (dy / dist) * tr;
+            d += `M${s.x.toFixed(1)},${s.y.toFixed(1)}L${tx.toFixed(1)},${ty.toFixed(1)}`;
+          }
+          overlay.setAttribute("d", d);
+        }
+      }
+    };
+
+    const onTick = () => {
+      tickCounter++;
+      for (const n of nodes) {
+        if (n.x == null) continue;
+        nodeRefs.current
+          .get(n.id)
+          ?.setAttribute("transform", `translate(${n.x},${n.y})`);
+      }
+      updateEdgePaths();
+
       const now = Date.now();
       if (now - lastZone > 120) {
         lastZone = now;
         updateZoneRects();
+      }
+      // Re-evaluate culling every 4 ticks (cheap diff).
+      if (tickCounter % 4 === 0 && now - lastCull > 80) {
+        lastCull = now;
+        updateCulling();
       }
 
       // Trigger a single React rerender after the simulation cools — this is
@@ -354,15 +452,30 @@ export const CodeGraphCanvas = ({
       if (sim.alpha() < 0.05) {
         settledTimer = setTimeout(() => {
           updateZoneRects();
+          updateCulling();
           setLayoutVersion((v) => v + 1);
         }, 200);
       }
-    });
+
+      // Idle-stop: when alpha is very low for 500ms, stop the simulation entirely.
+      if (idleTimer) clearTimeout(idleTimer);
+      if (sim.alpha() < 0.02) {
+        idleTimer = setTimeout(() => sim.stop(), 500);
+      }
+    };
+
+    sim.on("tick", onTick);
+
+    // Expose a restart hook on the sim for external triggers (zoom/hover).
+    (sim as unknown as { __restart?: () => void }).__restart = () => {
+      if (sim.alpha() < 0.05) sim.alpha(0.1).restart();
+    };
 
     simRef.current = sim;
     return () => {
       sim.stop();
       if (settledTimer) clearTimeout(settledTimer);
+      if (idleTimer) clearTimeout(idleTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, links, size.w, size.h, zoneAnchors, zoneByNodeId, physics, showZones, zoneList]);
@@ -375,7 +488,11 @@ export const CodeGraphCanvas = ({
       .scaleExtent([0.1, 8])
       .on("zoom", (e) => {
         g.attr("transform", e.transform.toString());
+        transformRef.current = { k: e.transform.k, x: e.transform.x, y: e.transform.y };
         setZoomLevel(e.transform.k);
+        // Wake the simulation so culling re-runs in next tick.
+        const sim = simRef.current as unknown as { __restart?: () => void } | null;
+        sim?.__restart?.();
       });
     zoomRef.current = z;
     svg.call(z as never);
@@ -417,6 +534,14 @@ export const CodeGraphCanvas = ({
   }, [search, nodes]);
 
   const finalHighlight = searchMatches ?? highlight;
+
+  // Push current highlight set into the ref so the tick loop can rebuild the
+  // overlay path. Also wake the sim so an immediate tick repaints the overlay.
+  useEffect(() => {
+    highlightRef.current = finalHighlight;
+    const sim = simRef.current as unknown as { __restart?: () => void } | null;
+    sim?.__restart?.();
+  }, [finalHighlight]);
 
   // Top-N most-connected nodes per zone get persistent labels
   const importantIds = useMemo(() => {
@@ -541,7 +666,7 @@ export const CodeGraphCanvas = ({
           ))}
         </defs>
 
-        <g ref={gRef}>
+        <g ref={gRef} style={{ willChange: "transform" }}>
           {/* Zone backgrounds */}
           <g pointerEvents="none">
             {zoneDescriptors.map((z) => {
@@ -594,46 +719,43 @@ export const CodeGraphCanvas = ({
             })}
           </g>
 
-          {/* Edges */}
+          {/* Edges — one <path> per type, geometry rebuilt in tick. */}
           <g>
-            {links.map((l, i) => {
-              const s = l.source as SimNode;
-              const t = l.target as SimNode;
-              const isContains = l.type === "contains";
-              // Skip "contains" edges entirely on very large graphs — they add the
-              // most DOM with the least signal.
-              if (isContains && nodes.length > 1000) return null;
-              const lit = finalHighlight
-                ? finalHighlight.has(s.id) && finalHighlight.has(t.id)
-                : true;
-              const base = EDGE_BASE_OPACITY[l.type];
-              const focusHide = focusMode && finalHighlight && !lit;
-              const opacity = focusHide
-                ? 0.03
-                : isContains
-                ? (finalHighlight ? (lit ? 0.15 : 0.02) : 0.1)
-                : lit
-                  ? (finalHighlight ? Math.min(0.9, base * 1.6) : base)
-                  : (finalHighlight ? 0.04 : base * 0.5);
-              const useEdgeFilter = lit && !isContains && links.length <= HEAVY_EDGE_COUNT;
+            {(["contains", "imports", "calls", "include"] as EdgeType[]).map((t) => {
+              if (t === "contains" && nodes.length > 1000) return null;
+              const isContains = t === "contains";
+              const dimmed = !!finalHighlight;
+              const baseOpacity = isContains
+                ? (dimmed ? 0.04 : EDGE_BASE_OPACITY[t])
+                : (dimmed ? 0.06 : EDGE_BASE_OPACITY[t] * 0.85);
               return (
-                <line
-                  key={i}
+                <path
+                  key={t}
                   ref={(el) => {
-                    if (el) linkRefs.current.set(String(i), el);
-                    else linkRefs.current.delete(String(i));
+                    if (el) edgePathRefs.current.set(t, el);
+                    else edgePathRefs.current.delete(t);
                   }}
-                  x1={0} y1={0} x2={0} y2={0}
-                  stroke={EDGE_COLOR[l.type]}
-                  strokeWidth={isContains ? 0.4 : l.type === "imports" ? 1.2 : 0.8}
-                  strokeDasharray={l.type === "calls" ? "4 3" : undefined}
-                  opacity={opacity}
-                  markerEnd={!isContains ? `url(#arrow-${l.type})` : undefined}
-                  filter={useEdgeFilter ? "url(#edge-highlight)" : undefined}
-                  style={{ transition: "opacity 150ms" }}
+                  d=""
+                  fill="none"
+                  stroke={EDGE_COLOR[t]}
+                  strokeWidth={isContains ? 0.4 : t === "imports" ? 1.1 : 0.8}
+                  strokeDasharray={t === "calls" ? "4 3" : undefined}
+                  opacity={baseOpacity}
+                  style={{ transition: "opacity 200ms", pointerEvents: "none" }}
                 />
               );
             })}
+            {/* Highlight overlay — single path drawn over the bulk edges. */}
+            <path
+              ref={(el) => { edgeOverlayRef.current = el; }}
+              d=""
+              fill="none"
+              stroke="hsl(184,68%,34%)"
+              strokeWidth={1.6}
+              opacity={finalHighlight ? 0.85 : 0}
+              filter={links.length <= HEAVY_EDGE_COUNT ? "url(#edge-highlight)" : undefined}
+              style={{ transition: "opacity 150ms", pointerEvents: "none" }}
+            />
           </g>
 
           {/* Nodes */}
