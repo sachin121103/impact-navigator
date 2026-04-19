@@ -1,19 +1,58 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, AlertTriangle, Loader2, GitCommit } from "lucide-react";
+import { ChevronDown, AlertTriangle, Loader2, Activity } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 interface RiskyFile {
   file_path: string;
-  churn: number;
+  score: number;
   symbols: number;
+  fanIn: number;
+  fanOut: number;
+  churn: number;
 }
 
-const churnBand = (churn: number, max: number): { label: string; cls: string } => {
-  const pct = max > 0 ? churn / max : 0;
+interface SymbolRow {
+  file_path: string;
+  fan_in: number;
+  fan_out: number;
+  churn: number;
+}
+
+const scoreBand = (score: number, max: number): { label: string; cls: string } => {
+  const pct = max > 0 ? score / max : 0;
   if (pct >= 0.66) return { label: "HIGH", cls: "text-risk-high border-risk-high/40" };
   if (pct >= 0.33) return { label: "MED", cls: "text-risk-med border-risk-med/40" };
   return { label: "LOW", cls: "text-risk-low border-risk-low/40" };
+};
+
+const aggregateHotspots = (rows: SymbolRow[], limit: number) => {
+  const byFile = new Map<string, RiskyFile>();
+
+  for (const row of rows) {
+    const current = byFile.get(row.file_path);
+    if (!current) {
+      byFile.set(row.file_path, {
+        file_path: row.file_path,
+        score: row.fan_in * 3 + row.fan_out * 2 + row.churn,
+        symbols: 1,
+        fanIn: row.fan_in,
+        fanOut: row.fan_out,
+        churn: row.churn,
+      });
+      continue;
+    }
+
+    current.symbols += 1;
+    current.fanIn = Math.max(current.fanIn, row.fan_in);
+    current.fanOut = Math.max(current.fanOut, row.fan_out);
+    current.churn = Math.max(current.churn, row.churn);
+    current.score = current.fanIn * 3 + current.fanOut * 2 + current.churn + current.symbols;
+  }
+
+  return [...byFile.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
 };
 
 export const RiskyFilesPanel = ({ repoUrl }: { repoUrl: string }) => {
@@ -22,44 +61,72 @@ export const RiskyFilesPanel = ({ repoUrl }: { repoUrl: string }) => {
     | { status: "idle" }
     | { status: "loading" }
     | { status: "error"; message: string }
-    | { status: "ready"; files: RiskyFile[]; maxChurn: number }
+    | { status: "ready"; files: RiskyFile[]; maxScore: number }
   >({ status: "idle" });
+
+  useEffect(() => {
+    setState({ status: "idle" });
+  }, [repoUrl]);
 
   useEffect(() => {
     if (!open || state.status !== "idle") return;
     let cancelled = false;
+
     (async () => {
       setState({ status: "loading" });
       try {
-        const { data, error } = await supabase.functions.invoke("risky-files", {
-          body: { repoUrl, limit: 12 },
-        });
+        const { data: repo, error: repoError } = await supabase
+          .from("repos")
+          .select("id")
+          .eq("url", repoUrl)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (repoError) throw new Error(repoError.message);
+        if (!repo) throw new Error("Repo not found");
+
+        const { data: rows, error } = await supabase
+          .from("symbols")
+          .select("file_path, fan_in, fan_out, churn")
+          .eq("repo_id", repo.id)
+          .order("fan_in", { ascending: false })
+          .order("fan_out", { ascending: false })
+          .order("churn", { ascending: false })
+          .limit(300);
+
         if (error) throw new Error(error.message);
-        if (!(data as any)?.ok) throw new Error((data as any)?.error ?? "Failed to load");
+
+        const files = aggregateHotspots((rows ?? []) as SymbolRow[], 12);
+        const maxScore = files[0]?.score ?? 0;
+
         if (!cancelled) {
           setState({
             status: "ready",
-            files: (data as any).files,
-            maxChurn: (data as any).maxChurn,
+            files,
+            maxScore,
           });
         }
       } catch (err) {
         if (!cancelled) setState({ status: "error", message: (err as Error).message });
       }
     })();
-    return () => { cancelled = true; };
+
+    return () => {
+      cancelled = true;
+    };
   }, [open, repoUrl, state.status]);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="rounded-lg border border-border bg-card shadow-paper">
       <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left">
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex min-w-0 items-center gap-2">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-risk-med" />
           <span className="font-mono text-[11px] uppercase tracking-widest text-accent">
             Risky files
           </span>
-          <span className="font-mono text-[10px] text-muted-foreground truncate">
-            · ranked by git churn · predictive
+          <span className="truncate font-mono text-[10px] text-muted-foreground">
+            · ranked by graph hotspots · predictive
           </span>
         </div>
         <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
@@ -68,7 +135,7 @@ export const RiskyFilesPanel = ({ repoUrl }: { repoUrl: string }) => {
         <div className="border-t border-border">
           {state.status === "loading" && (
             <div className="flex items-center gap-2 px-4 py-4 text-xs font-mono text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" /> Aggregating commit history…
+              <Loader2 className="h-3 w-3 animate-spin" /> Loading indexed hotspots…
             </div>
           )}
           {state.status === "error" && (
@@ -79,27 +146,32 @@ export const RiskyFilesPanel = ({ repoUrl }: { repoUrl: string }) => {
           )}
           {state.status === "ready" && state.files.length === 0 && (
             <div className="px-4 py-4 text-xs font-mono text-muted-foreground">
-              No churn data available yet — try re-indexing the repo.
+              No hotspots found yet — index the repo first.
             </div>
           )}
           {state.status === "ready" && state.files.length > 0 && (
-            <div className="divide-y divide-border max-h-72 overflow-y-auto">
+            <div className="max-h-72 divide-y divide-border overflow-y-auto">
               {state.files.map((f) => {
-                const band = churnBand(f.churn, state.maxChurn);
-                const pct = state.maxChurn > 0 ? (f.churn / state.maxChurn) * 100 : 0;
+                const band = scoreBand(f.score, state.maxScore);
+                const pct = state.maxScore > 0 ? (f.score / state.maxScore) * 100 : 0;
                 return (
-                  <div key={f.file_path} className="px-4 py-2.5 space-y-1.5">
+                  <div key={f.file_path} className="space-y-1.5 px-4 py-2.5">
                     <div className="flex items-center gap-2 text-xs">
                       <span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${band.cls}`}>
                         {band.label}
                       </span>
-                      <span className="font-mono text-foreground truncate flex-1 min-w-0" title={f.file_path}>
+                      <span className="min-w-0 flex-1 truncate font-mono text-foreground" title={f.file_path}>
                         {f.file_path}
                       </span>
-                      <span className="shrink-0 inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground">
-                        <GitCommit className="h-3 w-3" />
-                        {f.churn}
+                      <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[10px] text-muted-foreground">
+                        <Activity className="h-3 w-3" />
+                        {f.score}
                       </span>
+                    </div>
+                    <div className="flex items-center gap-3 font-mono text-[10px] text-muted-foreground">
+                      <span>fanin {f.fanIn}</span>
+                      <span>fanout {f.fanOut}</span>
+                      <span>symbols {f.symbols}</span>
                     </div>
                     <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
                       <div
