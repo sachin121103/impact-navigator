@@ -96,6 +96,8 @@ const ImpactRadar = () => {
   const [repoStatus, setRepoStatus] = useState<RepoStatus>({ state: "empty" });
   const [isIndexing, setIsIndexing] = useState(false);
   const [radarState, setRadarState] = useState<RadarState>({ status: "idle" });
+  const [suggestState, setSuggestState] = useState<SuggestState>({ status: "idle" });
+  const [lastPrompt, setLastPrompt] = useState<string>("");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
