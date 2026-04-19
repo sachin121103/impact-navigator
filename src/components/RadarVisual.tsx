@@ -1,65 +1,78 @@
 /**
- * Animated radar — concentric rings + sweeping arc + pulsing dependent dots.
- * When `results` are provided the dots are colored by risk level and placed by depth.
+ * Animated radar — concentric rings + sweeping arc.
+ * Idle: empty radar with a faint "awaiting change" label.
+ * Result: each dot represents an affected symbol.
+ *   - distance from center = call-graph depth (closer = more direct)
+ *   - dot size = symbol fan_in (bigger = wider downstream propagation)
+ *   - color = single neutral ink, opacity falls off with depth
  */
 
-type RiskLevel = "high" | "medium" | "low";
-
 interface AffectedDot {
-  risk: RiskLevel;
+  id?: string;
+  name?: string;
+  file_path?: string;
   depth: number;
+  fan_in?: number;
+  // Legacy field — accepted but no longer used for color.
+  risk?: "high" | "medium" | "low";
 }
 
 interface Props {
   results?: AffectedDot[];
 }
 
-const STATIC_DOTS = [
-  { r: 38, angle: 20, delay: 0 },
-  { r: 64, angle: 110, delay: 0.3 },
-  { r: 64, angle: 200, delay: 0.6 },
-  { r: 92, angle: 60, delay: 0.9 },
-  { r: 92, angle: 250, delay: 1.2 },
-  { r: 92, angle: 320, delay: 1.5 },
-  { r: 120, angle: 30, delay: 1.8 },
-  { r: 120, angle: 150, delay: 2.1 },
-  { r: 120, angle: 280, delay: 0.4 },
-];
-
 const RING_RADII = [40, 68, 96, 124];
-const RISK_FILL: Record<RiskLevel, string> = {
-  high: "hsl(var(--risk-high))",
-  medium: "hsl(var(--risk-med))",
-  low: "hsl(var(--risk-low))",
-};
 
 const polar = (r: number, angle: number) => {
   const rad = (angle * Math.PI) / 180;
   return { x: 160 + r * Math.cos(rad), y: 160 + r * Math.sin(rad) };
 };
 
+const depthOpacity = (depth: number) => {
+  // d1 → 0.95, d2 → 0.75, d3 → 0.55, d4+ → 0.4
+  const map = [0.95, 0.75, 0.55, 0.4];
+  return map[Math.min(Math.max(depth, 1), 4) - 1];
+};
+
+const fanInRadius = (fanIn: number) => {
+  // Clamp 0..20 → 3..7 px
+  const f = Math.max(0, Math.min(fanIn, 20));
+  return 3 + (f / 20) * 4;
+};
+
 function buildResultDots(affected: AffectedDot[]) {
-  // Group by depth (1–4+), then distribute evenly around the ring
   const byDepth: Record<number, AffectedDot[]> = {};
-  for (const a of affected.slice(0, 32)) {
-    const d = Math.min(a.depth, 4);
+  for (const a of affected.slice(0, 64)) {
+    const d = Math.min(Math.max(a.depth, 1), 4);
     (byDepth[d] = byDepth[d] ?? []).push(a);
   }
-  const dots: { x: number; y: number; fill: string; r: number }[] = [];
+  const dots: {
+    x: number; y: number; r: number; opacity: number;
+    name: string; file: string; depth: number; fanIn: number;
+  }[] = [];
   for (const [depthStr, group] of Object.entries(byDepth)) {
     const depth = Number(depthStr);
     const radius = RING_RADII[depth - 1] ?? RING_RADII[3];
     group.forEach((a, i) => {
       const angle = (360 / group.length) * i - 90;
       const { x, y } = polar(radius, angle);
-      dots.push({ x, y, fill: RISK_FILL[a.risk], r: a.risk === "high" ? 5 : 4 });
+      dots.push({
+        x, y,
+        r: fanInRadius(a.fan_in ?? 0),
+        opacity: depthOpacity(depth),
+        name: a.name ?? "symbol",
+        file: a.file_path ?? "",
+        depth,
+        fanIn: a.fan_in ?? 0,
+      });
     });
   }
   return dots;
 }
 
 export const RadarVisual = ({ results }: Props) => {
-  const resultDots = results ? buildResultDots(results) : null;
+  const hasResults = !!results && results.length > 0;
+  const resultDots = hasResults ? buildResultDots(results!) : null;
 
   return (
     <div className="relative aspect-square w-full max-w-[420px] mx-auto">
@@ -103,37 +116,41 @@ export const RadarVisual = ({ results }: Props) => {
           <path d="M 160 160 L 290 160 A 130 130 0 0 0 215 50 Z" fill="url(#sweep)" />
         </g>
 
-        {resultDots ? (
-          // Real result dots — colored by risk level, positioned by BFS depth
+        {resultDots &&
           resultDots.map((d, i) => (
-            <circle key={i} cx={d.x} cy={d.y} r={d.r} fill={d.fill} opacity="0.85" />
-          ))
-        ) : (
-          // Default animated dots
-          STATIC_DOTS.map((d, i) => {
-            const { x, y } = polar(d.r, d.angle);
-            return (
-              <g key={i} style={{ animationDelay: `${d.delay}s` }}>
-                <circle
-                  cx={x}
-                  cy={y}
-                  r="6"
-                  fill="hsl(var(--accent))"
-                  opacity="0.25"
-                  style={{
-                    transformOrigin: `${x}px ${y}px`,
-                    animation: `radar-pulse 2.4s cubic-bezier(0.16, 1, 0.3, 1) ${d.delay}s infinite`,
-                  }}
-                />
-                <circle cx={x} cy={y} r="3" fill="hsl(var(--accent))" />
-              </g>
-            );
-          })
-        )}
+            <circle
+              key={i}
+              cx={d.x}
+              cy={d.y}
+              r={d.r}
+              fill="hsl(var(--foreground))"
+              opacity={d.opacity}
+            >
+              <title>
+                {d.name}
+                {d.file ? ` · ${d.file.split("/").slice(-2).join("/")}` : ""}
+                {` · depth ${d.depth} · fan-in ${d.fanIn}`}
+              </title>
+            </circle>
+          ))}
 
         {/* center node — the changed symbol */}
         <circle cx="160" cy="160" r="10" fill="hsl(var(--primary))" />
         <circle cx="160" cy="160" r="5" fill="hsl(var(--background))" />
+
+        {/* idle label */}
+        {!hasResults && (
+          <text
+            x="160"
+            y="186"
+            textAnchor="middle"
+            className="fill-muted-foreground"
+            style={{ fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: 1.5 }}
+            opacity="0.55"
+          >
+            AWAITING CHANGE
+          </text>
+        )}
       </svg>
     </div>
   );
