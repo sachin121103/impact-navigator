@@ -738,6 +738,8 @@ function resolveCSharpImport(spec: string, classIdx: Map<string, string>): strin
   }
   return null;
 }
+
+// ---------- JS / TS parser -------------------------------------------------
 const JS_RESERVED = new Set([
   "if", "else", "for", "while", "do", "switch", "case", "default",
   "return", "break", "continue", "throw", "try", "catch", "finally",
