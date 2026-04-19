@@ -508,7 +508,38 @@ export const CodeGraphCanvas = ({
     };
 
     simRef.current = sim;
+
+    // ----- Pre-warm: silently advance the simulation before the first paint -----
+    setComposing(true);
+    setSettled(false);
+    let prewarmCancelled = false;
+    const prewarmTicks =
+      nodes.length <= 500 ? 120 : nodes.length <= 2000 ? 80 : 50;
+    const startSim = () => {
+      if (prewarmCancelled) return;
+      // Run silent ticks (no DOM writes — `sim.tick(n)` doesn't fire "tick").
+      sim.tick(prewarmTicks);
+      // Paint final positions once.
+      onTick();
+      updateZoneRects();
+      updateCulling();
+      // Resume a gentle "breathe into place" — low alpha, slow decay.
+      sim.alpha(0.3).alphaDecay(0.05).restart();
+      // Reveal.
+      requestAnimationFrame(() => {
+        if (!prewarmCancelled) setComposing(false);
+      });
+      // Mark settled after the breathe completes so zone rects can appear.
+      window.setTimeout(() => {
+        if (!prewarmCancelled) setSettled(true);
+      }, 700);
+    };
+    // Defer one frame so the loading scrim paints first.
+    const handle = window.setTimeout(startSim, 0);
+
     return () => {
+      prewarmCancelled = true;
+      window.clearTimeout(handle);
       sim.stop();
       if (settledTimer) clearTimeout(settledTimer);
       if (idleTimer) clearTimeout(idleTimer);
