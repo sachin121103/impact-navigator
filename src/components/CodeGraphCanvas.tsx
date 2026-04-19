@@ -265,6 +265,38 @@ export const CodeGraphCanvas = ({
 
   // Simulation with direct DOM mutation on tick
   useEffect(() => {
+    // ----- Seeded radial init by zone -----
+    // Deterministic so re-renders don't shuffle. Using a tiny LCG.
+    let seed = 0;
+    for (const n of nodes) for (let i = 0; i < n.id.length; i++) seed = (seed * 31 + n.id.charCodeAt(i)) | 0;
+    let s = (seed >>> 0) || 1;
+    const rand = () => {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return s / 0xffffffff;
+    };
+    // Group by zone for radial placement around each anchor
+    const byZone = new Map<string, SimNode[]>();
+    for (const n of nodes) {
+      const k = zoneByNodeId.get(n.id) ?? "root";
+      if (!byZone.has(k)) byZone.set(k, []);
+      byZone.get(k)!.push(n);
+    }
+    for (const [key, members] of byZone) {
+      const a = zoneAnchors.get(key);
+      const cx = a?.cx ?? size.w / 2;
+      const cy = a?.cy ?? size.h / 2;
+      const baseRadius = Math.min(60, 14 + Math.sqrt(members.length) * 6);
+      members.forEach((n, i) => {
+        // Even angular distribution + small jitter so collide can spread them.
+        const angle = (i / Math.max(1, members.length)) * Math.PI * 2 + rand() * 0.4;
+        const rr = baseRadius * (0.5 + rand() * 0.5);
+        n.x = cx + Math.cos(angle) * rr;
+        n.y = cy + Math.sin(angle) * rr;
+        n.vx = 0;
+        n.vy = 0;
+      });
+    }
+
     const sim = forceSimulation<SimNode, SimLink>(nodes)
       .force(
         "link",
@@ -291,9 +323,10 @@ export const CodeGraphCanvas = ({
           return (k && zoneAnchors.get(k)?.cy) ?? size.h / 2;
         }).strength(physics.centerStrength),
       )
+      // Stop the auto-tick — we'll pre-warm silently then let it run.
       .alpha(1)
-      .alphaDecay(0.025);
-
+      .alphaDecay(0.04)
+      .stop();
     // Build zone-member index once per (re-)build for fast bbox recompute.
     const zoneMembersByKey = new Map<string, SimNode[]>();
     for (const z of zoneList) zoneMembersByKey.set(z.key, z.members);
