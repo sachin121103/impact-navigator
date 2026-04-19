@@ -86,6 +86,14 @@ export const SentinelGraphCanvas = ({
   const positions = useMemo(() => layout(graph), [graph]);
   const dead = useMemo(() => new Set(findDeadNodes(graph).map((n) => n.id)), [graph]);
 
+  // Choreographed entrance — defer reveal one frame so the scrim paints first.
+  const [composing, setComposing] = useState(true);
+  useEffect(() => {
+    setComposing(true);
+    const t = window.setTimeout(() => setComposing(false), 60);
+    return () => window.clearTimeout(t);
+  }, [graph]);
+
   // Perf gating: at high node counts, drop expensive per-node animations.
   const heavy = graph.nodes.length > 200;
 
