@@ -22,7 +22,7 @@ export const SubPageShell = ({
 }) => {
   const { user, signOut } = useAuth();
   return (
-    <div className="relative min-h-screen w-full overflow-hidden texture-paper">
+    <div className="relative min-h-screen w-full texture-paper">
       {/* Floating top bar */}
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between px-5 py-4">
         <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-border/60 bg-card/70 px-4 py-2 shadow-paper backdrop-blur">
@@ -59,9 +59,9 @@ export const SubPageShell = ({
       </header>
 
       {/* Two-column split: visual left, text right */}
-      <div className="grid min-h-screen grid-cols-1 items-center gap-8 px-6 pb-16 pt-24 lg:grid-cols-[1.1fr_440px] lg:gap-12 lg:pl-10 lg:pr-12">
+      <div className="grid grid-cols-1 items-start gap-8 px-6 pb-24 pt-24 lg:grid-cols-[1.1fr_440px] lg:gap-12 lg:pl-10 lg:pr-12">
         {/* Visual column */}
-        <div className="relative flex h-[55vh] items-center justify-center lg:h-[80vh]">
+        <div className="relative flex min-h-[55vh] items-start justify-center">
           <div className="w-full max-w-[680px]">{visual}</div>
         </div>
 
@@ -85,7 +85,7 @@ export const SubPageShell = ({
 
       {/* Legend pill */}
       {legend && (
-        <div className="pointer-events-auto absolute bottom-4 left-4 z-10 rounded-full border border-border/60 bg-card/70 px-4 py-1.5 font-mono text-[10px] text-muted-foreground shadow-paper backdrop-blur">
+        <div className="pointer-events-auto fixed bottom-4 left-4 z-10 rounded-full border border-border/60 bg-card/70 px-4 py-1.5 font-mono text-[10px] text-muted-foreground shadow-paper backdrop-blur">
           {legend}
         </div>
       )}
