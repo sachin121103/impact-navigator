@@ -628,13 +628,23 @@ export const CodeGraphCanvas = ({
 
   const finalHighlight = searchMatches ?? highlight;
 
-  // Push current highlight set into the ref so the tick loop can rebuild the
-  // overlay path. Also wake the sim so an immediate tick repaints the overlay.
+  // Push current highlight set into the ref. Hover-driven changes ONLY repaint
+  // the edge overlay (no sim restart). Selection/search changes still wake
+  // the sim so culling and label dedupe re-run.
+  const prevSelSearchRef = useRef<{ sel: string | null; search: string }>({ sel: selectedId, search });
   useEffect(() => {
     highlightRef.current = finalHighlight;
-    const sim = simRef.current as unknown as { __restart?: () => void } | null;
-    sim?.__restart?.();
-  }, [finalHighlight]);
+    const prev = prevSelSearchRef.current;
+    const selSearchChanged = prev.sel !== selectedId || prev.search !== search;
+    prevSelSearchRef.current = { sel: selectedId, search };
+    if (selSearchChanged) {
+      const sim = simRef.current as unknown as { __restart?: () => void } | null;
+      sim?.__restart?.();
+    } else {
+      // Hover-only change — just rebuild the overlay path directly.
+      repaintOverlayRef.current?.();
+    }
+  }, [finalHighlight, selectedId, search]);
 
   // Top-N most-connected nodes per zone get persistent labels
   const importantIds = useMemo(() => {
