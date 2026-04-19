@@ -490,11 +490,13 @@ export const CodeGraphCanvas = ({
         if (!hl) {
           overlay.setAttribute("d", "");
         } else {
+          const culled = culledRef.current;
           let d = "";
           for (const l of links) {
             const s = l.source as SimNode;
             const t = l.target as SimNode;
             if (s.x == null || t.x == null) continue;
+            if (culled.has(s.id) || culled.has(t.id)) continue;
             if (!hl.has(s.id) || !hl.has(t.id)) continue;
             if (l.type === "contains") continue;
             const dx = t.x - s.x;
