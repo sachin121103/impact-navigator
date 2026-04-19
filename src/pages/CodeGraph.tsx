@@ -257,10 +257,40 @@ const CodeGraph = () => {
   };
 
   // Apply abstraction transform to the full graph before rendering.
-  const displayData = useMemo(
-    () => applyAbstraction(data, abstractionLevel, focusStack),
-    [data, abstractionLevel, focusStack],
-  );
+  // At symbol level with no focused file (and no active search), reduce
+  // visual clutter by keeping only top-K + high-signal symbols.
+  const { displayData, hiddenByFile, totalSymbolCount, visibleSymbolCount } = useMemo(() => {
+    const base = applyAbstraction(data, abstractionLevel, focusStack);
+    const totalSymbols = base.nodes.filter((n) => n.type !== "file").length;
+
+    const shouldTrim =
+      abstractionLevel === "symbol" &&
+      !focusStack[1] &&
+      !search.trim() &&
+      density !== "all";
+
+    if (!shouldTrim) {
+      return {
+        displayData: base,
+        hiddenByFile: new Map<string, string[]>(),
+        totalSymbolCount: totalSymbols,
+        visibleSymbolCount: totalSymbols,
+      };
+    }
+
+    const cfg = densityConfig(density, totalSymbols);
+    const topped = topKSymbols(base, metrics, cfg.topK);
+    const { payload, hiddenByFile: hbf } = collapseLowSignalSymbols(topped, metrics, {
+      keepRatio: cfg.keepRatio,
+      minPerFile: cfg.minPerFile,
+    });
+    return {
+      displayData: payload,
+      hiddenByFile: hbf,
+      totalSymbolCount: totalSymbols,
+      visibleSymbolCount: payload.nodes.filter((n) => n.type !== "file").length,
+    };
+  }, [data, abstractionLevel, focusStack, search, density, metrics]);
 
   // Click handler that drills down through abstraction levels.
   const handleNodeSelect = (id: string | null) => {
