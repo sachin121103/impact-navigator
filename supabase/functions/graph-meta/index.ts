@@ -914,11 +914,16 @@ Deno.serve(async (req) => {
 
     // Try main, then master
     let files: { path: string; content: string }[] = [];
+    let skippedExt: Record<string, number> = {};
+    let totalCandidate = 0;
     let usedBranch = "main";
     for (const branch of ["main", "master"]) {
       try {
         const tarUrl = `https://codeload.github.com/${owner}/${name}/tar.gz/refs/heads/${branch}`;
-        files = await readTarGz(tarUrl);
+        const r = await readTarGz(tarUrl);
+        files = r.files;
+        skippedExt = r.skippedExt;
+        totalCandidate = r.totalCandidate;
         usedBranch = branch;
         break;
       } catch (e) {
@@ -938,7 +943,19 @@ Deno.serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ nodes, edges, _meta: { owner, name, branch: usedBranch, file_count: files.length } }),
+      JSON.stringify({
+        nodes,
+        edges,
+        _meta: {
+          owner,
+          name,
+          branch: usedBranch,
+          file_count: files.length,
+          parsed_file_count: files.length,
+          candidate_file_count: totalCandidate,
+          skipped_extensions: skippedExt,
+        },
+      }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (e) {
