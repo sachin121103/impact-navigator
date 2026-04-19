@@ -693,6 +693,8 @@ function buildGraph(files: { path: string; content: string }[]): {
 
   const fnIndex: Record<string, string> = {};
   const pendingCalls: [string, string][] = [];
+  // Java import resolution needs a class-name → file index built up front.
+  const javaClassIdx = buildJavaClassIndex(files);
 
   for (const f of files) {
     const ext = f.path.slice(f.path.lastIndexOf(".")).toLowerCase();
@@ -755,6 +757,34 @@ function buildGraph(files: { path: string; content: string }[]): {
         )) {
           edges.push({ source: f.path, target: matched, type: "include" });
         }
+      }
+    } else if (ext === ".java") {
+      const p = parseJava(f.content);
+      for (const cls of p.classes) {
+        const id = `${f.path}::${cls}`;
+        if (!nodes.some((n) => n.id === id)) {
+          nodes.push({ id, type: "class", file: f.path, name: cls });
+        }
+      }
+      for (const qn of p.methods) {
+        const id = `${f.path}::${qn}`;
+        if (!nodes.some((n) => n.id === id)) {
+          nodes.push({ id, type: "function", file: f.path, name: qn });
+        }
+        fnIndex[qn] = id;
+        const bare = qn.split(".").pop()!;
+        if (!(bare in fnIndex)) fnIndex[bare] = id;
+      }
+      for (const spec of new Set(p.imports)) {
+        const target = resolveJavaImport(spec, javaClassIdx);
+        if (target && target !== f.path && !edges.some(
+          (e) => e.source === f.path && e.target === target && e.type === "imports",
+        )) {
+          edges.push({ source: f.path, target, type: "imports" });
+        }
+      }
+      for (const [caller, callee] of p.calls) {
+        pendingCalls.push([`${f.path}::${caller}`, callee]);
       }
     }
     else if (
