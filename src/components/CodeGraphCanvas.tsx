@@ -432,19 +432,24 @@ export const CodeGraphCanvas = ({
         if (n.x < x0 || n.x > x1 || n.y < y0 || n.y > y1) next.add(n.id);
       }
       // Diff-apply display:none.
+      let changed = false;
       for (const id of next) {
         if (!culled.has(id)) {
           const el = nodeRefs.current.get(id);
           if (el) el.style.display = "none";
+          changed = true;
         }
       }
       for (const id of culled) {
         if (!next.has(id)) {
           const el = nodeRefs.current.get(id);
           if (el) el.style.display = "";
+          changed = true;
         }
       }
       culledRef.current = next;
+      // Repaint edges so lines to/from newly-culled nodes disappear.
+      if (changed) updateEdgePaths();
     };
 
     const buildEdgePath = (arr: SimLink[]) => {
