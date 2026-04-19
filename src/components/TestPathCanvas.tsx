@@ -210,7 +210,7 @@ const NodeMark = ({
       {isCovering && !isSelected && (
         <circle r={r + 4} fill="none" stroke="hsl(var(--accent))" strokeWidth={1} opacity={0.5} />
       )}
-      {isTest ? (
+      {node.type === "file" || isTest ? (
         <rect x={-r} y={-r} width={r * 2} height={r * 2} fill={fill} />
       ) : (
         <circle r={r} fill={fill} />

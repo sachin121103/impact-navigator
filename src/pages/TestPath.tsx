@@ -167,7 +167,9 @@ const TestPath = () => {
       }
       legend={
         <span className="flex flex-wrap items-center gap-3">
-          <span className="text-foreground">●</span> code
+          <span className="text-foreground">●</span> symbol
+          <span className="text-border">·</span>
+          <span className="text-foreground">■</span> file
           <span className="text-border">·</span>
           <span className="text-accent">■</span> test
           <span className="text-border">·</span>
