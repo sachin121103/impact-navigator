@@ -64,9 +64,13 @@ export const RiskyFilesPanel = ({ repoUrl }: { repoUrl: string }) => {
     | { status: "ready"; files: RiskyFile[]; maxScore: number }
   >({ status: "idle" });
 
+  const fetchedKeyRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!open) return;
-    if (state.status !== "idle") return;
+    const key = repoUrl;
+    if (fetchedKeyRef.current === key) return;
+    fetchedKeyRef.current = key;
     let cancelled = false;
 
     (async () => {
@@ -98,21 +102,20 @@ export const RiskyFilesPanel = ({ repoUrl }: { repoUrl: string }) => {
         const maxScore = files[0]?.score ?? 0;
 
         if (!cancelled) {
-          setState({
-            status: "ready",
-            files,
-            maxScore,
-          });
+          setState({ status: "ready", files, maxScore });
         }
       } catch (err) {
-        if (!cancelled) setState({ status: "error", message: (err as Error).message });
+        if (!cancelled) {
+          fetchedKeyRef.current = null;
+          setState({ status: "error", message: (err as Error).message });
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [open, repoUrl, state.status]);
+  }, [open, repoUrl]);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="rounded-lg border border-border bg-card shadow-paper">
