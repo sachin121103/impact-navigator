@@ -329,7 +329,7 @@ Deno.serve(async (req) => {
         })),
         affected,
         summary,
-        identifiers: [...ids].slice(0, 50),
+        identifiers: [...idHits.keys()].slice(0, 50),
         durationMs: Date.now() - startedAt,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
