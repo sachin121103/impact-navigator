@@ -1,65 +1,35 @@
 
 
-## Goal
-The Functions (symbol) level dumps every class/function from every file into one giant hairball. Reduce what's drawn so it stays readable, without losing the ability to explore detail on demand.
+## Problem
+Two issues with the radar:
+1. **Idle state**: Green/teal dots are pure decoration — they don't represent any data, so they look like fake info.
+2. **Result state**: Risk-colored dots (red/amber/green) are redundant with the new Criticality verdict and even contradict the philosophy we just adopted (no per-symbol risk, judge the change as a whole).
 
-## Strategy: "Show what matters, hide the rest"
+## Fix: make the dots mean something real
 
-Three combined techniques, each cheap to implement:
+Re-purpose the dots so each one represents an **actual affected symbol**, encoded along three dimensions that the criticality verdict *doesn't* already convey:
 
-### 1. Default to a focused subgraph instead of the whole repo
-At the Functions level with **no file focused**, today we render every symbol in the repo. Change the default behaviour:
+| Visual channel | Encodes | Why it adds info |
+|---|---|---|
+| **Distance from center** (ring) | call-graph depth (1 = direct caller, 4 = deep transitive) | shows how *close* the blast is |
+| **Dot size** | fan-in of that symbol (how widely *it* is used) | bigger dot = hitting it propagates further |
+| **Color** | single neutral ink tone with opacity by depth (closer = more opaque) | removes the redundant red/amber/green; preserves "near = matters more" |
 
-- If the user lands on Functions level globally (no `focusStack` file), show only the **top N most important symbols** (by PageRank / degree, already computed in the worker) — e.g. top 80 symbols + their direct edges.
-- A small badge in the toolbar reads: `Showing top 80 of 412 functions` with a `Show all` link to opt into the full view.
+The center node = the resolved target symbol (already there).
 
-This is the single biggest win — turns 400+ nodes into ~80.
+### Idle state
+Replace the 9 fake teal dots with: nothing. Just the rings + the sweep + center. Add a faint label `awaiting change` near the center. The empty radar reads as "ready to scan" instead of "fake data".
 
-### 2. Collapse low-signal symbols into their parent file
-Many files have 10+ tiny helpers (1-line getters, private utilities) that clutter the view. Roll them up:
+### Hover affordance
+On dot hover, show a tooltip with the symbol name, file, depth, and fan-in — turns the radar into an actual exploration surface instead of decoration.
 
-- For each file, keep symbols that are **either**: (a) called from outside the file, (b) in the top X% by PageRank, or (c) above a LOC threshold.
-- Remaining symbols collapse into a single `+ N more` chip attached to the file node. Clicking the chip expands that file's full symbol list inline.
-
-### 3. Hide leaf "calls" edges by default
-At Functions level, `calls` edges create most of the spaghetti. Render only:
-- `contains` edges (file → its visible symbols), always.
-- `calls` edges only **between visible symbols** (cross-file or high-importance).
-
-Intra-file low-signal calls disappear unless that file is focused.
-
-## UI additions
-
-- **Toolbar density slider** (3 stops): `Essential · Balanced · All`. Controls N in technique #1 and the threshold in #2.
-- **Per-file expand chip** rendered next to file nodes when symbols are hidden.
-- **Tooltip hint** on hidden-count badge: "Hidden symbols are still searchable" — typing in search reveals matches even if they were collapsed.
-
-## How it's built
-
-1. **`src/lib/graph-layers.ts`** — add:
-   - `topKSymbols(payload, metrics, k)` → returns subgraph of top-k symbol nodes + their files + edges between them.
-   - `collapseLowSignalSymbols(payload, metrics, opts)` → returns `{ payload, hiddenByFile: Map<fileId, string[]> }`.
-
-2. **`src/pages/CodeGraph.tsx`**:
-   - Add `density: "essential" | "balanced" | "all"` state (default `balanced`).
-   - When `abstractionLevel === "symbol"` and no file is focused, pipe `displayData` through `topKSymbols` then `collapseLowSignalSymbols` using the metrics already available from the worker.
-   - Render density slider + hidden-count badge in the existing toolbar row.
-
-3. **`src/components/CodeGraphCanvas.tsx`**:
-   - Accept `hiddenByFile` prop. For each file node with hidden symbols, render a small `+N` chip (group with rect + text) positioned near the node.
-   - Click chip → call new `onExpandFile(fileId)` callback that pushes the file into `focusStack` (existing drill-down path already works).
-
-4. **Search integration**: when search is non-empty, bypass collapsing/top-K so matches always appear (extends the existing "search jumps to Functions level" rule).
-
-## What stays the same
-- All abstraction-level logic, breadcrumb, module/file collapse, ComposingScrim, worker metrics — untouched.
-- No backend or schema changes.
+### Result-state caption (under radar)
+Currently repeats the criticality verdict. Change to a complementary stat: `5 immediate · 12 transitive · deepest d4` — so the caption and the criticality banner each say a different thing.
 
 ## Files touched
-- `src/lib/graph-layers.ts` (add 2 helpers)
-- `src/pages/CodeGraph.tsx` (density state, slider, wiring)
-- `src/components/CodeGraphCanvas.tsx` (render `+N` chips, expand callback)
+- `src/components/RadarVisual.tsx` — drop `STATIC_DOTS`, change `RISK_FILL` mapping to a single ink tone with depth-based opacity, scale dot radius by fan-in, add `<title>` tooltips, render an idle "awaiting change" label.
+- `src/pages/ImpactRadar.tsx` — pass `fan_in` through to the radar (extend the `AffectedDot` shape consumed by `RadarVisual`); replace the redundant criticality caption under the radar with the depth-distribution stat.
 
 ## Out of scope
-- Manual hide/show per node, saved density per repo, animated expand transitions.
+- Animated dot transitions, click-to-pin, legend overlay.
 
