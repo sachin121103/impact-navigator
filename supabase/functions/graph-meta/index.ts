@@ -1114,6 +1114,13 @@ function buildGraph(files: { path: string; content: string }[]): {
 
   const fnIndex: Record<string, string> = {};
   const pendingCalls: [string, string][] = [];
+  // For JS/TS we resolve callees through the importing file's own binding map
+  // (local name → import spec → resolved file → that file's symbol).
+  // Falls back to global fnIndex only when the name isn't imported anywhere.
+  const pendingJsCalls: { callerId: string; callerFile: string; callee: string }[] = [];
+  const jsBindings: Map<string, Record<string, string>> = new Map();
+  // file path → { symbolName → nodeId } so we can pin a callee to a specific file.
+  const fnByFile: Map<string, Record<string, string>> = new Map();
   // Class/module → file indexes for cross-file import resolution.
   const javaClassIdx = buildJavaClassIndex(files);
   const goPkgIdx = buildGoPackageIndex(files);
