@@ -58,6 +58,7 @@ const TestPath = () => {
     () => ({
       nodesById: indexNodes(data.nodes),
       reverseAdj: buildReverseAdjacency(data.edges),
+      forwardAdj: buildForwardAdjacency(data.edges),
     }),
     [data],
   );
@@ -79,9 +80,9 @@ const TestPath = () => {
       .slice(0, 50);
   }, [codeNodes, search]);
 
-  const plan: TestPlan | null = useMemo(() => {
-    if (!modifiedId) return null;
-    return buildTestPlan(modifiedId, data, ctx);
+  const proposals: TestProposal[] = useMemo(() => {
+    if (!modifiedId) return [];
+    return proposeTests(modifiedId, data, ctx);
   }, [modifiedId, data, ctx]);
 
   const coveringIds = useMemo(() => {
@@ -96,6 +97,10 @@ const TestPath = () => {
     [coverage],
   );
   const dead = useMemo(() => findDeadCode(data), [data]);
+  const deadFunctions = useMemo(
+    () => dead.filter((d) => d.node.type === "function" || d.node.type === "class"),
+    [dead],
+  );
 
   const prPlan = useMemo(() => {
     const files = prFiles
