@@ -530,6 +530,9 @@ export const CodeGraphCanvas = ({
       if (sim.alpha() < 0.05) sim.alpha(0.1).restart();
     };
 
+    // Expose an overlay-only repaint so hover changes don't have to wake physics.
+    repaintOverlayRef.current = () => updateEdgePaths();
+
     simRef.current = sim;
 
     // ----- Pre-warm: silently advance the simulation before the first paint -----
