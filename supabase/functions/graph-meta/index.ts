@@ -902,13 +902,46 @@ function matchBrace(s: string, openIdx: number): number {
 
 function parseJs(rawSrc: string): JsParsed {
   const src = stripJsNoise(rawSrc);
-  const out: JsParsed = { functions: [], classes: [], imports: [], calls: [] };
+  const out: JsParsed = { functions: [], classes: [], imports: [], calls: [], bindings: {} };
 
-  const reImpFrom = /\bimport\b[^;'"`]*?\bfrom\s*['"]([^'"]+)['"]/g;
+  // Parse `import ... from '...'` with binding extraction so we can map
+  // local names → source spec (for accurate cross-file edge resolution).
+  const reImpFromFull = /\bimport\s+(?:type\s+)?([\s\S]*?)\s+from\s*['"]([^'"]+)['"]/g;
   const reImpBare = /(?:^|[\n;])\s*import\s*['"]([^'"]+)['"]/g;
   const reImpDyn = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
   const reReq = /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
-  for (const re of [reImpFrom, reImpBare, reImpDyn, reReq]) {
+
+  {
+    let m: RegExpExecArray | null;
+    while ((m = reImpFromFull.exec(src)) !== null) {
+      const clause = m[1].trim();
+      const spec = m[2];
+      out.imports.push(spec);
+      // Default import: `Foo` or `Foo, { ... }`
+      const defMatch = clause.match(/^([A-Za-z_$][\w$]*)/);
+      if (defMatch && !clause.startsWith("{") && !clause.startsWith("*")) {
+        out.bindings[defMatch[1]] = spec;
+      }
+      // Namespace: `* as Ns`
+      const nsMatch = clause.match(/\*\s+as\s+([A-Za-z_$][\w$]*)/);
+      if (nsMatch) out.bindings[nsMatch[1]] = spec;
+      // Named: `{ A, B as C }`
+      const braceMatch = clause.match(/\{([^}]*)\}/);
+      if (braceMatch) {
+        for (const part of braceMatch[1].split(",")) {
+          const trimmed = part.trim().replace(/^type\s+/, "");
+          if (!trimmed) continue;
+          const asMatch = trimmed.match(/^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/);
+          if (asMatch) out.bindings[asMatch[2]] = spec;
+          else {
+            const nameMatch = trimmed.match(/^([A-Za-z_$][\w$]*)$/);
+            if (nameMatch) out.bindings[nameMatch[1]] = spec;
+          }
+        }
+      }
+    }
+  }
+  for (const re of [reImpBare, reImpDyn, reReq]) {
     let m: RegExpExecArray | null;
     while ((m = re.exec(src)) !== null) out.imports.push(m[1]);
   }
