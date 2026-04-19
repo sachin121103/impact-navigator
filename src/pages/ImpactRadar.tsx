@@ -437,6 +437,14 @@ const ImpactRadar = () => {
             )}
           </div>
 
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-muted-foreground">
+            <Stat value={String(radarState.data.summary.total)} label="affected" />
+            <Stat value={`${radarState.data.durationMs}ms`} label="radar time" />
+            <button
+              onClick={() => {
+                setRadarState({ status: "idle" });
+                setSuggestState({ status: "idle" });
+              }}
               className="font-mono text-xs underline underline-offset-2 hover:text-foreground transition-colors"
             >
               reset
