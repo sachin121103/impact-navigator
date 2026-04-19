@@ -505,10 +505,10 @@ export const CodeGraphCanvas = ({
         }, 200);
       }
 
-      // Idle-stop: when alpha is very low for 500ms, stop the simulation entirely.
+      // Idle-stop: when alpha is low for 300ms, stop the simulation entirely.
       if (idleTimer) clearTimeout(idleTimer);
-      if (sim.alpha() < 0.02) {
-        idleTimer = setTimeout(() => sim.stop(), 500);
+      if (sim.alpha() < 0.05) {
+        idleTimer = setTimeout(() => sim.stop(), 300);
       }
     };
 
