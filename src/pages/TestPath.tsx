@@ -327,8 +327,8 @@ const TestPath = () => {
 
             {/* ── PR MODE ── */}
             <TabsContent value="pr" className="mt-4 space-y-3">
-              <p className="text-xs text-muted-foreground">
-                Paste changed file paths (one per line) to compute the union test plan.
+              <p className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">PR mode.</span> Paste the list of files changed in a pull request (one per line). TestPath aggregates the union of all tests reaching any of them — perfect for CI hooks that should only run what the PR actually affects.
               </p>
               <Textarea
                 value={prFiles}
