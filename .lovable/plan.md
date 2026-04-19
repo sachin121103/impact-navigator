@@ -1,58 +1,59 @@
 
-
 ## Goal
-Drastically reduce lag on `/code-graph` (and similarly `/sentinel-graph`) for large repos by fixing the worst rendering and metric hotspots, while keeping the same visuals.
+Push `/code-graph` and `/sentinel-graph` past the previous optimization pass — go from "smooth on 1k nodes" to "smooth on 3k+ nodes" without a full Canvas/WebGL rewrite.
 
-## Root causes (measured by code reading)
-1. **Re-render storm during simulation.** `setTickCount` every 80ms re-renders thousands of `<g>` nodes, `<line>` edges, zone rects, AND re-runs `visibleLabelIds` (O(n²) collision check) and `zoneRects`. Already mutating DOM directly via refs makes the React rerender pure waste.
-2. **`percentileRank` is O(n log n) per call**, and is called per-node twice per render (`analysisColor` + outer ring). Effectively O(n² log n) per render in PageRank mode.
-3. **`computeBetweenness` uses `queue.shift()`** (O(n)) inside Brandes → O(n³ log n) overall. Also `computeAllMetrics` re-walks adjacency 4× and `computeGraphStats` calls `computeBetweenness` again if not cached (it is, fine — but pagerank/betweenness still dominate).
-4. **`zoneRects` recomputed every tick** (~12×/s), iterating every node.
-5. **Per-node SVG filters** (`url(#node-shadow)`) on thousands of nodes are very expensive in browsers.
+## What's still expensive (after the last pass)
 
-## Approach (no UI changes)
+1. **Every tick still touches every node.** The simulation tick loop calls `setAttribute('cx'|'cy', …)` on N circles + N labels + M lines, ~12×/sec. At 2k nodes that's 6k DOM writes/frame triggering style recalc on the whole `<svg>` subtree.
+2. **Edges are individual `<line>` elements.** Each one is a separate layer in the SVG render tree. 3k edges = 3k DOM nodes the browser repaints on any pan/zoom.
+3. **Labels render even when zoomed out.** Tiny text below the legibility threshold still costs a text layout per label per frame.
+4. **Pan/zoom re-applies a transform on the root `<g>`** — fine — but anything inside that uses non-transform animations (rings, ripples) forces full repaints inside the transformed layer.
+5. **No viewport culling.** Nodes/edges off-screen are still in the DOM and still get tick updates.
+6. **Sentinel ripples** keep `AnimatePresence` + 3 infinite `motion.circle` per selection, which Framer re-evaluates each frame.
 
-### A. Stop re-rendering during simulation
-- Remove `setTickCount` driven re-renders. Update zone rects and label positions via direct DOM mutation in the tick loop, the same way nodes/edges already are.
-- Keep one cheap rAF-throttled state update only when zoom changes (already separate).
-- Recompute `visibleLabelIds` and `zoneRects` only when: data changes, zoom crosses a threshold, selection/hover/search changes — never on every tick. Compute them on a debounced "simulation settled" callback (`alpha < 0.05`) plus on demand.
+## Approach
 
-### B. Cache percentile arrays
-- Precompute, once per `metrics` change: sorted pagerank values + an `id → percentile` Map, and store on the metrics object (or in a `useMemo` next to it). Replace `percentileRank(metrics.pagerank, n.id)` lookups with O(1) map reads.
+### A. Single-path edges (biggest win)
+Replace the per-edge `<line>` elements with **one `<path>` per edge-style** (one for `imports`, one for `calls`, one for `contains`, etc.). Each tick, we rebuild a single `d="M x1 y1 L x2 y2 …"` string and assign it once. Going from 3000 DOM nodes → 3 DOM nodes for edges typically cuts paint by 5–10×.
+- File: `src/components/CodeGraphCanvas.tsx`, `src/components/SentinelGraphCanvas.tsx`
+- Highlighted/blast edges go in a separate overlay `<path>` so we don't touch the bulk path on hover.
 
-### C. Faster Brandes
-- Replace `queue.shift()` with an index pointer (`while (head < queue.length)` `queue[head++]`). That alone makes betweenness ~10–50× faster on 500+ node graphs.
-- Avoid pre-seeding Maps with every id every iteration; use plain objects keyed by string and only set what's needed.
-- For graphs with N > ~600, sample sources (already done in stats; do same for betweenness with a configurable cap, e.g. 200 sources, then upscale).
+### B. Transform-based node positioning
+Switch each node group from `setAttribute('cx', …)` on `<circle>` + `setAttribute('x', …)` on `<text>` to a single `setAttribute('transform', 'translate(x,y)')` on the wrapping `<g>`. One write per node instead of 3–4, and `transform` updates skip layout — only compositing.
 
-### D. Drop heavy SVG filters at scale
-- For node count > 400, disable `url(#node-shadow)` on non-active nodes (use a flat `stroke` instead). Keep the active/hover shadow only on the focused node. This is the single biggest paint win.
-- Disable `edge-highlight` blur filter when N edges > 800.
+### C. Viewport culling
+Track current pan/zoom (already in state). Each tick, for each node compute "is on screen with margin?". If off-screen:
+- Hide the node `<g>` via `display: none` (not just opacity — `display:none` skips paint entirely).
+- Skip its segment in the edges path.
+Re-evaluate culling only every ~4 ticks (cheap diff) to keep the per-frame cost low.
 
-### E. Render budget
-- When `nodes.length > 1500`, hide labels entirely except for active/hover/search matches and top-N important. Also drop the per-node animated rings (cycle/orphan/PageRank pulse) for non-active nodes — keep the colour ring instead.
-- Skip rendering edges of type `contains` when N > 1000 (they add the most visual noise and DOM load with little signal).
+### D. Zoom-tiered LOD
+Three tiers driven by `zoom`:
+- **z < 0.4** (zoomed out): no labels, no rings, no shadows; nodes drawn as flat circles only.
+- **0.4 ≤ z < 0.9**: labels only on hovered/selected/search-matched/top-N important nodes (already partly there — tighten the cap from current threshold to a hard top-50).
+- **z ≥ 0.9**: full detail.
 
-### F. Move heavy metric compute off the main thread (optional, gated)
-- Wrap `computeAllMetrics` in a Web Worker (Vite supports `new Worker(new URL(...), { type: "module" })`). Show the graph immediately with `metrics = undefined`; populate when worker resolves. Cancel previous worker on new data.
-- This keeps the main thread responsive while metrics crunch.
+### E. Stop animating on idle
+After simulation `alpha < 0.02` for >500ms, stop the rAF tick entirely. Restart it on: hover, drag, zoom, data change, selection. Currently the loop keeps running at low alpha doing tiny no-op writes.
+
+### F. Sentinel-specific
+- Replace per-edge `<line>` with grouped `<path>` (3 paths: imports / calls / covers).
+- Cap ripple rings to **1** instead of 3 (visually nearly identical, 3× cheaper).
+- Disable the dead-glow filter entirely above 150 nodes (already partially done) and use a static red stroke instead.
+
+### G. Will-change hint, sparingly
+On the pan/zoom root `<g>`, add `style={{ willChange: 'transform' }}`. Do **not** apply it to nodes — that would balloon GPU memory.
 
 ## Files
-- **edit** `src/components/CodeGraphCanvas.tsx` — kill `setTickCount`, mutate zone rects/labels via refs, gate filters & rings by node count, cache percentile map.
-- **edit** `src/lib/graph-metrics.ts` — index-based BFS queue in Brandes, source-sampling for big N, expose `pagerankPercentile: Map<string, number>` on `GraphMetrics`.
-- **edit** `src/pages/CodeGraph.tsx` — wrap `computeAllMetrics` in a worker (`src/lib/metrics.worker.ts`), show partial UI while pending.
-- **add** `src/lib/metrics.worker.ts` — worker entry that imports from `graph-metrics.ts` and posts results back.
-- **edit** `src/components/SentinelGraphCanvas.tsx` — same scale gating (skip per-node animated rings beyond a threshold) so it stays smooth for bigger graphs too.
-
-## Verification
-1. Load `/code-graph`, paste a large repo (e.g. `vercel/next.js` subset or `facebook/react`), confirm:
-   - Initial layout still animates without UI freeze.
-   - Switching to **Influence / Bottleneck Risk** modes no longer hangs the tab.
-   - Pan/zoom stays at 60fps once simulation cools.
-2. `/sentinel-graph` still demos smoothly with sample data (no regression).
-3. Profile with `browser--performance_profile` before/after — confirm long-task count drops.
+- **edit** `src/components/CodeGraphCanvas.tsx` — grouped-path edges, transform-based node updates, viewport culling, LOD tiers, idle-stop tick loop.
+- **edit** `src/components/SentinelGraphCanvas.tsx` — grouped-path edges, single ripple ring, transform-based nodes.
+- No new deps. No worker changes. No metric changes.
 
 ## Out of scope
-- Switching to canvas/WebGL rendering (would be a much bigger rewrite — propose later if SVG ceiling is still hit at 5k+ nodes).
-- Server-side metric precomputation in `graph-meta`.
+- Canvas/WebGL rendering (separate proposal if SVG ceiling is still hit at 5k+).
+- Server-side layout precomputation.
 
+## Verification
+1. `/code-graph` with `facebook/react`-scale repo: pan/zoom stays at 60fps once cool; switching analysis modes no longer repaints the whole edge layer.
+2. `/sentinel-graph` with sample data: ripple still visible, no jank on selection.
+3. DOM node count for `<svg>` subtree drops by ~edge-count (verifiable via DevTools Elements panel).
