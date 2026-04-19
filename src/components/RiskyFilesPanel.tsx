@@ -65,11 +65,8 @@ export const RiskyFilesPanel = ({ repoUrl }: { repoUrl: string }) => {
   >({ status: "idle" });
 
   useEffect(() => {
-    setState({ status: "idle" });
-  }, [repoUrl]);
-
-  useEffect(() => {
-    if (!open || state.status !== "idle") return;
+    if (!open) return;
+    if (state.status !== "idle") return;
     let cancelled = false;
 
     (async () => {
