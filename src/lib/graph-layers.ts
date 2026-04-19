@@ -3,6 +3,7 @@
 // for higher-level visual abstraction (modules / files / symbols).
 
 import type { GraphEdge, GraphNode, GraphPayload } from "@/lib/sample-graph";
+import type { GraphMetrics } from "@/lib/graph-metrics";
 
 export type AbstractionLevel = "module" | "file" | "symbol";
 
