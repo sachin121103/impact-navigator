@@ -150,39 +150,84 @@ export const RiskyFilesPanel = ({ repoUrl }: { repoUrl: string }) => {
             </div>
           )}
           {state.status === "ready" && state.files.length > 0 && (
-            <div className="max-h-72 divide-y divide-border overflow-y-auto">
-              {state.files.map((f) => {
-                const band = scoreBand(f.score, state.maxScore);
-                const pct = state.maxScore > 0 ? (f.score / state.maxScore) * 100 : 0;
-                return (
-                  <div key={f.file_path} className="space-y-1.5 px-4 py-2.5">
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${band.cls}`}>
-                        {band.label}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate font-mono text-foreground" title={f.file_path}>
-                        {f.file_path}
-                      </span>
-                      <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[10px] text-muted-foreground">
-                        <Activity className="h-3 w-3" />
-                        {f.score}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3 font-mono text-[10px] text-muted-foreground">
-                      <span>fanin {f.fanIn}</span>
-                      <span>fanout {f.fanOut}</span>
-                      <span>symbols {f.symbols}</span>
-                    </div>
-                    <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+            <>
+              {/* Heatmap strip — quick visual summary across all files */}
+              <div className="border-b border-border bg-muted/30 px-4 py-2.5">
+                <div className="mb-1.5 flex items-center justify-between font-mono text-[9px] uppercase tracking-widest text-muted-foreground">
+                  <span>heatmap · risk intensity</span>
+                  <span>{state.files.length} files</span>
+                </div>
+                <div className="flex h-4 w-full gap-px overflow-hidden rounded-sm">
+                  {state.files.map((f) => {
+                    const band = scoreBand(f.score, state.maxScore);
+                    const intensity = state.maxScore > 0 ? f.score / state.maxScore : 0;
+                    const bgClass = band.cls.split(" ")[0].replace("text-", "bg-");
+                    return (
                       <div
-                        className={`h-full ${band.cls.split(" ")[0].replace("text-", "bg-")}`}
-                        style={{ width: `${Math.max(4, pct)}%` }}
+                        key={`hm-${f.file_path}`}
+                        className={`flex-1 ${bgClass} transition-opacity hover:opacity-100`}
+                        style={{ opacity: 0.35 + intensity * 0.65 }}
+                        title={`${f.file_path} · score ${f.score}`}
                       />
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="max-h-72 divide-y divide-border overflow-y-auto">
+                {state.files.map((f) => {
+                  const band = scoreBand(f.score, state.maxScore);
+                  const pct = state.maxScore > 0 ? (f.score / state.maxScore) * 100 : 0;
+                  const maxComp = Math.max(f.fanIn, f.fanOut, f.churn, 1);
+                  return (
+                    <div key={f.file_path} className="space-y-1.5 px-4 py-2.5">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${band.cls}`}>
+                          {band.label}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate font-mono text-foreground" title={f.file_path}>
+                          {f.file_path}
+                        </span>
+                        {/* Inline mini heatmap: fanIn / fanOut / churn */}
+                        <div
+                          className="flex shrink-0 items-end gap-0.5 h-4"
+                          title={`fanIn ${f.fanIn} · fanOut ${f.fanOut} · churn ${f.churn}`}
+                        >
+                          <div
+                            className="w-1 bg-risk-high rounded-sm"
+                            style={{ height: `${Math.max(15, (f.fanIn / maxComp) * 100)}%` }}
+                          />
+                          <div
+                            className="w-1 bg-risk-med rounded-sm"
+                            style={{ height: `${Math.max(15, (f.fanOut / maxComp) * 100)}%` }}
+                          />
+                          <div
+                            className="w-1 bg-accent rounded-sm"
+                            style={{ height: `${Math.max(15, (f.churn / maxComp) * 100)}%` }}
+                          />
+                        </div>
+                        <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[10px] text-muted-foreground">
+                          <Activity className="h-3 w-3" />
+                          {f.score}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 font-mono text-[10px] text-muted-foreground">
+                        <span><span className="text-risk-high">■</span> fanin {f.fanIn}</span>
+                        <span><span className="text-risk-med">■</span> fanout {f.fanOut}</span>
+                        <span><span className="text-accent">■</span> churn {f.churn}</span>
+                        <span>symbols {f.symbols}</span>
+                      </div>
+                      <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={`h-full ${band.cls.split(" ")[0].replace("text-", "bg-")}`}
+                          style={{ width: `${Math.max(4, pct)}%` }}
+                        />
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </div>
       </CollapsibleContent>
