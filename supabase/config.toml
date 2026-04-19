@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.code-impact]
 verify_jwt = false
+
+[functions.risky-files]
+verify_jwt = false

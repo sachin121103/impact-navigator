@@ -226,8 +226,8 @@ const ImpactRadar = () => {
   const summary = radarState.status === "result" ? radarState.data.summary : null;
 
   const visual = (
-    <div className="space-y-6">
-      <div className="relative">
+    <div className="space-y-8">
+      <div className="relative mx-auto w-full max-w-[620px]">
         <RadarVisual results={affected.length > 0 ? affected : undefined} />
         <div className="pointer-events-none absolute -bottom-4 left-1/2 -translate-x-1/2 rounded-md border border-border bg-card px-4 py-2.5 font-mono text-xs shadow-paper whitespace-nowrap">
           {summary ? (
@@ -245,7 +245,7 @@ const ImpactRadar = () => {
       </div>
 
       {repoStatus.state === "ready" && (
-        <div className="space-y-4 pt-4">
+        <div className="mx-auto grid w-full max-w-[620px] grid-cols-1 gap-4 pt-2">
           <RiskyFilesPanel repoUrl={repoUrl.trim()} />
           <CodeImpactPanel repoUrl={repoUrl.trim()} />
         </div>
