@@ -85,7 +85,7 @@ export const SubPageShell = ({
 
       {/* Legend pill */}
       {legend && (
-        <div className="pointer-events-auto absolute bottom-4 left-4 z-10 rounded-full border border-border/60 bg-card/70 px-4 py-1.5 font-mono text-[10px] text-muted-foreground shadow-paper backdrop-blur">
+        <div className="pointer-events-auto fixed bottom-4 left-4 z-10 rounded-full border border-border/60 bg-card/70 px-4 py-1.5 font-mono text-[10px] text-muted-foreground shadow-paper backdrop-blur">
           {legend}
         </div>
       )}
