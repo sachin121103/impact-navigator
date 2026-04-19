@@ -325,7 +325,7 @@ const CodeGraph = () => {
   const LEVELS: { id: AbstractionLevel; label: string }[] = [
     { id: "module", label: "Modules" },
     { id: "file",   label: "Files" },
-    { id: "symbol", label: "Symbols" },
+    { id: "symbol", label: "Functions" },
   ];
 
   return (

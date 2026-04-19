@@ -1071,6 +1071,7 @@ export const CodeGraphCanvas = ({
                   ? (metrics.betweenness.get(n.id) ?? 0) : 0;
                 const isBtWarn = btScore > 0.5;
                 const isSparse = (n.degree ?? 0) <= 1;
+                const isModule = n.id.startsWith("module:");
                 // Structural anomalies — always visible regardless of mode
                 const isCyclic = metrics?.cycles.cyclicNodeIds.has(n.id) ?? false;
                 const isOrphan = metrics?.orphans.orphanIds.has(n.id) ?? false;
@@ -1188,21 +1189,40 @@ export const CodeGraphCanvas = ({
                       />
                     )}
                     {isSparse && !isActive && (
-                      <circle
-                        r={r + 2.5}
-                        fill={PAPER_BG}
-                        opacity={0.96}
-                      />
+                      isModule ? (
+                        <rect
+                          x={-r - 2.5} y={-r - 2.5}
+                          width={(r + 2.5) * 2} height={(r + 2.5) * 2}
+                          rx={3} ry={3}
+                          fill={PAPER_BG}
+                          opacity={0.96}
+                        />
+                      ) : (
+                        <circle r={r + 2.5} fill={PAPER_BG} opacity={0.96} />
+                      )
                     )}
                     {/* Node */}
-                    <circle
-                      r={r}
-                      fill={color}
-                      stroke={PAPER_BG}
-                      strokeWidth={isSparse ? 1.9 : 1.5}
-                      filter={nodeFilter}
-                      opacity={1}
-                    />
+                    {isModule ? (
+                      <rect
+                        x={-r - 2} y={-r - 2}
+                        width={(r + 2) * 2} height={(r + 2) * 2}
+                        rx={3} ry={3}
+                        fill={color}
+                        stroke={PAPER_BG}
+                        strokeWidth={isSparse ? 1.9 : 1.5}
+                        filter={nodeFilter}
+                        opacity={1}
+                      />
+                    ) : (
+                      <circle
+                        r={r}
+                        fill={color}
+                        stroke={PAPER_BG}
+                        strokeWidth={isSparse ? 1.9 : 1.5}
+                        filter={nodeFilter}
+                        opacity={1}
+                      />
+                    )}
                     {/* Betweenness warning icon */}
                     {isBtWarn && (
                       <text
