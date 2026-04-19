@@ -170,6 +170,9 @@ export const CodeGraphCanvas = ({
   const [zoomLevel, setZoomLevel] = useState(1);
   // Bumped only on simulation settle / data change — NOT every tick.
   const [layoutVersion, setLayoutVersion] = useState(0);
+  // Composing = pre-warm in progress; settled = first cooldown reached.
+  const [composing, setComposing] = useState(true);
+  const [settled, setSettled] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showZones, setShowZones] = useState(true);
   const [focusMode, setFocusMode] = useState(false);
@@ -262,6 +265,38 @@ export const CodeGraphCanvas = ({
 
   // Simulation with direct DOM mutation on tick
   useEffect(() => {
+    // ----- Seeded radial init by zone -----
+    // Deterministic so re-renders don't shuffle. Using a tiny LCG.
+    let seed = 0;
+    for (const n of nodes) for (let i = 0; i < n.id.length; i++) seed = (seed * 31 + n.id.charCodeAt(i)) | 0;
+    let s = (seed >>> 0) || 1;
+    const rand = () => {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return s / 0xffffffff;
+    };
+    // Group by zone for radial placement around each anchor
+    const byZone = new Map<string, SimNode[]>();
+    for (const n of nodes) {
+      const k = zoneByNodeId.get(n.id) ?? "root";
+      if (!byZone.has(k)) byZone.set(k, []);
+      byZone.get(k)!.push(n);
+    }
+    for (const [key, members] of byZone) {
+      const a = zoneAnchors.get(key);
+      const cx = a?.cx ?? size.w / 2;
+      const cy = a?.cy ?? size.h / 2;
+      const baseRadius = Math.min(60, 14 + Math.sqrt(members.length) * 6);
+      members.forEach((n, i) => {
+        // Even angular distribution + small jitter so collide can spread them.
+        const angle = (i / Math.max(1, members.length)) * Math.PI * 2 + rand() * 0.4;
+        const rr = baseRadius * (0.5 + rand() * 0.5);
+        n.x = cx + Math.cos(angle) * rr;
+        n.y = cy + Math.sin(angle) * rr;
+        n.vx = 0;
+        n.vy = 0;
+      });
+    }
+
     const sim = forceSimulation<SimNode, SimLink>(nodes)
       .force(
         "link",
@@ -288,9 +323,10 @@ export const CodeGraphCanvas = ({
           return (k && zoneAnchors.get(k)?.cy) ?? size.h / 2;
         }).strength(physics.centerStrength),
       )
+      // Stop the auto-tick — we'll pre-warm silently then let it run.
       .alpha(1)
-      .alphaDecay(0.025);
-
+      .alphaDecay(0.04)
+      .stop();
     // Build zone-member index once per (re-)build for fast bbox recompute.
     const zoneMembersByKey = new Map<string, SimNode[]>();
     for (const z of zoneList) zoneMembersByKey.set(z.key, z.members);
@@ -472,7 +508,38 @@ export const CodeGraphCanvas = ({
     };
 
     simRef.current = sim;
+
+    // ----- Pre-warm: silently advance the simulation before the first paint -----
+    setComposing(true);
+    setSettled(false);
+    let prewarmCancelled = false;
+    const prewarmTicks =
+      nodes.length <= 500 ? 120 : nodes.length <= 2000 ? 80 : 50;
+    const startSim = () => {
+      if (prewarmCancelled) return;
+      // Run silent ticks (no DOM writes — `sim.tick(n)` doesn't fire "tick").
+      sim.tick(prewarmTicks);
+      // Paint final positions once.
+      onTick();
+      updateZoneRects();
+      updateCulling();
+      // Resume a gentle "breathe into place" — low alpha, slow decay.
+      sim.alpha(0.3).alphaDecay(0.05).restart();
+      // Reveal.
+      requestAnimationFrame(() => {
+        if (!prewarmCancelled) setComposing(false);
+      });
+      // Mark settled after the breathe completes so zone rects can appear.
+      window.setTimeout(() => {
+        if (!prewarmCancelled) setSettled(true);
+      }, 700);
+    };
+    // Defer one frame so the loading scrim paints first.
+    const handle = window.setTimeout(startSim, 0);
+
     return () => {
+      prewarmCancelled = true;
+      window.clearTimeout(handle);
       sim.stop();
       if (settledTimer) clearTimeout(settledTimer);
       if (idleTimer) clearTimeout(idleTimer);
@@ -562,10 +629,11 @@ export const CodeGraphCanvas = ({
 
   // Stable zone descriptor list. Positions/sizes are mutated via refs in the
   // sim tick loop — never recomputed on every React render.
+  // Suppressed during initial compose so morphing rects don't flash.
   const zoneDescriptors = useMemo(() => {
-    if (!showZones) return [];
+    if (!showZones || !settled) return [];
     return zoneList.map((z) => ({ key: z.key, hue: z.hue, members: z.members }));
-  }, [zoneList, showZones]);
+  }, [zoneList, showZones, settled]);
 
   const showFileLabels = zoomLevel > 0.7;
   const showClassLabels = zoomLevel > 1.2;
@@ -666,7 +734,14 @@ export const CodeGraphCanvas = ({
           ))}
         </defs>
 
-        <g ref={gRef} style={{ willChange: "transform" }}>
+        <g
+          ref={gRef}
+          style={{
+            willChange: "transform",
+            opacity: composing ? 0 : 1,
+            transition: "opacity 600ms ease-out",
+          }}
+        >
           {/* Zone backgrounds */}
           <g pointerEvents="none">
             {zoneDescriptors.map((z) => {
@@ -948,6 +1023,22 @@ export const CodeGraphCanvas = ({
           </g>
         </g>
       </svg>
+
+      {/* Loading scrim during pre-warm */}
+      <div
+        className="pointer-events-none absolute inset-0 flex items-center justify-center"
+        style={{
+          opacity: composing ? 1 : 0,
+          transition: "opacity 500ms ease-out",
+        }}
+      >
+        <div
+          className="rounded-full border px-4 py-2 font-mono text-[11px] shadow-paper"
+          style={{ ...GLASS, color: GLASS_MUTED, letterSpacing: "0.08em" }}
+        >
+          <span className="inline-block animate-pulse">Composing graph…</span>
+        </div>
+      </div>
 
       {/* Zoom + view controls */}
       <div

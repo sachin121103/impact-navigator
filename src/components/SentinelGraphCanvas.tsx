@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { FlaskConical } from "lucide-react";
 import {
@@ -86,6 +86,14 @@ export const SentinelGraphCanvas = ({
   const positions = useMemo(() => layout(graph), [graph]);
   const dead = useMemo(() => new Set(findDeadNodes(graph).map((n) => n.id)), [graph]);
 
+  // Choreographed entrance — defer reveal one frame so the scrim paints first.
+  const [composing, setComposing] = useState(true);
+  useEffect(() => {
+    setComposing(true);
+    const t = window.setTimeout(() => setComposing(false), 60);
+    return () => window.clearTimeout(t);
+  }, [graph]);
+
   // Perf gating: at high node counts, drop expensive per-node animations.
   const heavy = graph.nodes.length > 200;
 
@@ -142,6 +150,13 @@ export const SentinelGraphCanvas = ({
         </filter>
       </defs>
 
+      <g
+        style={{
+          opacity: composing ? 0 : 1,
+          transition: "opacity 600ms ease-out",
+          willChange: "opacity",
+        }}
+      >
       {/* Edges — one <path> per kind */}
       <g style={{ willChange: "opacity" }}>
         <path
@@ -305,6 +320,7 @@ export const SentinelGraphCanvas = ({
             </motion.g>
           );
         })}
+      </g>
       </g>
     </svg>
   );
