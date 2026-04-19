@@ -164,6 +164,17 @@ export const CodeGraphCanvas = ({
   // Active highlight set, kept in a ref so the tick loop can rebuild the overlay
   // path without re-subscribing to the simulation.
   const highlightRef = useRef<Set<string> | null>(null);
+  // Lets external code (hover effect) rebuild just the edge overlay without
+  // restarting the simulation.
+  const repaintOverlayRef = useRef<(() => void) | null>(null);
+  // Spatial index of nodes for nearest-node hit-testing on pointermove.
+  // Rebuilt on layout settle.
+  const spatialNodesRef = useRef<SimNode[]>([]);
+  // rAF-coalesced + debounced hover pick.
+  const pendingHoverIdRef = useRef<string | null | undefined>(undefined);
+  const hoverRafRef = useRef<number | null>(null);
+  const hoverDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const zoomLevelRef = useRef(1);
 
   const [size, setSize] = useState({ w: 800, h: 640 });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -519,6 +530,9 @@ export const CodeGraphCanvas = ({
       if (sim.alpha() < 0.05) sim.alpha(0.1).restart();
     };
 
+    // Expose an overlay-only repaint so hover changes don't have to wake physics.
+    repaintOverlayRef.current = () => updateEdgePaths();
+
     simRef.current = sim;
 
     // ----- Pre-warm: silently advance the simulation before the first paint -----
@@ -614,13 +628,23 @@ export const CodeGraphCanvas = ({
 
   const finalHighlight = searchMatches ?? highlight;
 
-  // Push current highlight set into the ref so the tick loop can rebuild the
-  // overlay path. Also wake the sim so an immediate tick repaints the overlay.
+  // Push current highlight set into the ref. Hover-driven changes ONLY repaint
+  // the edge overlay (no sim restart). Selection/search changes still wake
+  // the sim so culling and label dedupe re-run.
+  const prevSelSearchRef = useRef<{ sel: string | null; search: string }>({ sel: selectedId, search });
   useEffect(() => {
     highlightRef.current = finalHighlight;
-    const sim = simRef.current as unknown as { __restart?: () => void } | null;
-    sim?.__restart?.();
-  }, [finalHighlight]);
+    const prev = prevSelSearchRef.current;
+    const selSearchChanged = prev.sel !== selectedId || prev.search !== search;
+    prevSelSearchRef.current = { sel: selectedId, search };
+    if (selSearchChanged) {
+      const sim = simRef.current as unknown as { __restart?: () => void } | null;
+      sim?.__restart?.();
+    } else {
+      // Hover-only change — just rebuild the overlay path directly.
+      repaintOverlayRef.current?.();
+    }
+  }, [finalHighlight, selectedId, search]);
 
   // Top-N most-connected nodes per zone get persistent labels
   const importantIds = useMemo(() => {
@@ -707,6 +731,74 @@ export const CodeGraphCanvas = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, layoutVersion, activeId, finalHighlight, importantIds, showFileLabels, showClassLabels, showFnLabels, analysisMode, metrics]);
 
+  // Keep refs in sync for the SVG-level pointer hit-tester (which is bound
+  // once and reads nodes/zoom via refs to avoid handler churn).
+  useEffect(() => { spatialNodesRef.current = nodes; }, [nodes]);
+  useEffect(() => { zoomLevelRef.current = zoomLevel; }, [zoomLevel]);
+
+  // Cleanup pending hover work on unmount.
+  useEffect(() => () => {
+    if (hoverRafRef.current != null) cancelAnimationFrame(hoverRafRef.current);
+    if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current);
+  }, []);
+
+  // Single SVG-level pointer hit-test. Replaces per-node onMouseEnter/Leave —
+  // sweeping through 30 tiny nodes used to fire 30 React state updates; now
+  // only the node the cursor rests on (after a 40ms debounce) hits state.
+  const handlePointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const t = transformRef.current;
+    const k = t.k || 1;
+    // Convert client → svg viewBox → graph coords (account for viewBox scaling)
+    const sx = ((e.clientX - rect.left) / rect.width) * size.w;
+    const sy = ((e.clientY - rect.top) / rect.height) * size.h;
+    const gx = (sx - t.x) / k;
+    const gy = (sy - t.y) / k;
+
+    const nodes = spatialNodesRef.current;
+    const zl = zoomLevelRef.current;
+    // Hit-radius scales with zoom — small nodes get a slightly inflated target
+    // (was effectively unhittable at 3px). At low zoom, skip function nodes.
+    const skipFunctions = zl < 0.6;
+    let bestId: string | null = null;
+    let bestDist = Infinity;
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (n.x == null || n.y == null) continue;
+      if (skipFunctions && n.type === "function") continue;
+      const dx = n.x - gx;
+      const dy = n.y - gy;
+      const d2 = dx * dx + dy * dy;
+      const hit = nodeR(n) + 4;
+      if (d2 <= hit * hit && d2 < bestDist) {
+        bestDist = d2;
+        bestId = n.id;
+      }
+    }
+
+    pendingHoverIdRef.current = bestId;
+    if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current);
+    hoverDebounceRef.current = setTimeout(() => {
+      if (hoverRafRef.current != null) return;
+      hoverRafRef.current = requestAnimationFrame(() => {
+        hoverRafRef.current = null;
+        const next = pendingHoverIdRef.current;
+        if (next === undefined) return;
+        setHoveredId((cur) => (cur === next ? cur : next ?? null));
+      });
+    }, 40);
+  };
+
+  const handlePointerLeave = () => {
+    pendingHoverIdRef.current = null;
+    if (hoverDebounceRef.current) clearTimeout(hoverDebounceRef.current);
+    if (hoverRafRef.current != null) cancelAnimationFrame(hoverRafRef.current);
+    hoverRafRef.current = null;
+    setHoveredId((cur) => (cur === null ? cur : null));
+  };
+
   return (
     <div className="relative h-full w-full texture-paper">
       <svg
@@ -714,6 +806,8 @@ export const CodeGraphCanvas = ({
         viewBox={`0 0 ${size.w} ${size.h}`}
         className="h-full w-full select-none"
         onClick={(e) => { if (e.target === e.currentTarget) onSelect(null); }}
+        onPointerMove={handlePointerMove}
+        onPointerLeave={handlePointerLeave}
       >
         <defs>
           {/* Soft paper shadow for nodes */}
@@ -903,8 +997,6 @@ export const CodeGraphCanvas = ({
                       e.stopPropagation();
                       onSelect(n.id === selectedId ? null : n.id);
                     }}
-                    onMouseEnter={() => setHoveredId(n.id)}
-                    onMouseLeave={() => setHoveredId(null)}
                     onMouseDown={(e) => {
                       const sim = simRef.current;
                       if (!sim || !svgRef.current) return;
