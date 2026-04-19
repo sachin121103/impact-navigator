@@ -1071,6 +1071,7 @@ export const CodeGraphCanvas = ({
                   ? (metrics.betweenness.get(n.id) ?? 0) : 0;
                 const isBtWarn = btScore > 0.5;
                 const isSparse = (n.degree ?? 0) <= 1;
+                const isModule = n.id.startsWith("module:");
                 // Structural anomalies — always visible regardless of mode
                 const isCyclic = metrics?.cycles.cyclicNodeIds.has(n.id) ?? false;
                 const isOrphan = metrics?.orphans.orphanIds.has(n.id) ?? false;
