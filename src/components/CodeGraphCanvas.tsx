@@ -80,6 +80,7 @@ interface PhysicsConfig {
 const DEFAULT_PHYSICS: PhysicsConfig = { repel: -180, linkDistance: 110, centerStrength: 0.04 };
 
 const PAPER_BG = "hsl(38,36%,96%)";
+const SAFE_INSET = { top: 56, right: 26, bottom: 26, left: 26 };
 
 // Warm glass panels — matches the paper design system
 const GLASS: React.CSSProperties = {
@@ -520,7 +521,14 @@ export const CodeGraphCanvas = ({
     const onTick = () => {
       tickCounter++;
       for (const n of nodes) {
-        if (n.x == null) continue;
+        if (n.x == null || n.y == null) continue;
+        const rr = analysisRadius(n, analysisMode, metrics) + 16;
+        const minX = SAFE_INSET.left + rr;
+        const maxX = size.w - SAFE_INSET.right - rr;
+        const minY = SAFE_INSET.top + rr;
+        const maxY = size.h - SAFE_INSET.bottom - rr;
+        n.x = Math.max(minX, Math.min(maxX, n.x));
+        n.y = Math.max(minY, Math.min(maxY, n.y));
         nodeRefs.current
           .get(n.id)
           ?.setAttribute("transform", `translate(${n.x},${n.y})`);
