@@ -99,12 +99,14 @@ function tstr(buf: Uint8Array, off: number, len: number): string {
 async function readTarGz(
   url: string,
   maxFiles = 600,
+  githubToken?: string,
 ): Promise<{ files: { path: string; content: string }[]; skippedExt: Record<string, number>; totalCandidate: number }> {
-  const res = await fetch(url, { redirect: "follow" });
+  const headers: Record<string, string> = {};
+  if (githubToken) headers["Authorization"] = `token ${githubToken}`;
+  const res = await fetch(url, { redirect: "follow", headers });
   if (!res.ok || !res.body) {
     throw new Error(`Tarball fetch failed: ${res.status}`);
   }
-  // Pre-flight: refuse very large repos before we even decompress
   const contentLength = Number(res.headers.get("content-length") ?? 0);
   if (contentLength && contentLength > 25 * 1024 * 1024) {
     throw new Error(
@@ -1205,13 +1207,14 @@ async function enrichWithGitMeta(
   owner: string,
   name: string,
   nodes: GraphNode[],
+  githubToken?: string,
 ): Promise<void> {
   const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
     "User-Agent": "meridian-graph-meta",
   };
-  const tok = Deno.env.get("GITHUB_TOKEN");
+  const tok = githubToken ?? Deno.env.get("GITHUB_TOKEN");
   if (tok) headers.Authorization = `Bearer ${tok}`;
 
   const lastCommit: Record<string, string> = {};
@@ -1266,6 +1269,30 @@ Deno.serve(async (req) => {
     return new Response("ok", { headers: corsHeaders });
   }
   try {
+    // Require a valid JWT — graph-meta proxies GitHub on behalf of the user
+    // and must not be a free unauthenticated API for the world.
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const { createClient } = await import("jsr:@supabase/supabase-js@2");
+    const userClient = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_ANON_KEY")!,
+      { global: { headers: { Authorization: authHeader } } },
+    );
+    const token = authHeader.replace("Bearer ", "");
+    const { data: claimsData, error: claimsErr } = await userClient.auth.getClaims(token);
+    if (claimsErr || !claimsData?.claims?.sub) {
+      return new Response(JSON.stringify({ error: "Invalid session" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const url = new URL(req.url);
     const repo = url.searchParams.get("repo");
     if (!repo) {
@@ -1274,9 +1301,24 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    // Optional ephemeral GitHub PAT for private repos (POST body or header).
+    let githubToken: string | undefined;
+    if (req.method === "POST") {
+      try {
+        const body = await req.json();
+        if (typeof body.githubToken === "string" && body.githubToken.length > 0) {
+          githubToken = body.githubToken;
+        }
+      } catch { /* ignore */ }
+    }
+    if (!githubToken) {
+      const headerTok = req.headers.get("X-GitHub-Token");
+      if (headerTok) githubToken = headerTok;
+    }
+
     const { owner, name } = parseRepoUrl(repo);
 
-    // Try main, then master
     let files: { path: string; content: string }[] = [];
     let skippedExt: Record<string, number> = {};
     let totalCandidate = 0;
@@ -1284,7 +1326,7 @@ Deno.serve(async (req) => {
     for (const branch of ["main", "master"]) {
       try {
         const tarUrl = `https://codeload.github.com/${owner}/${name}/tar.gz/refs/heads/${branch}`;
-        const r = await readTarGz(tarUrl);
+        const r = await readTarGz(tarUrl, 600, githubToken);
         files = r.files;
         skippedExt = r.skippedExt;
         totalCandidate = r.totalCandidate;
@@ -1297,10 +1339,9 @@ Deno.serve(async (req) => {
 
     const { nodes, edges } = buildGraph(files);
 
-    // Best-effort enrichment; skip on big repos to avoid CPU limit
     if (files.length <= 250) {
       try {
-        await enrichWithGitMeta(owner, name, nodes);
+        await enrichWithGitMeta(owner, name, nodes, githubToken);
       } catch (e) {
         console.warn("git meta failed", e);
       }
