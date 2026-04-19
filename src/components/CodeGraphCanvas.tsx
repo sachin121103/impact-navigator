@@ -146,6 +146,8 @@ export const CodeGraphCanvas = ({
   search = "",
   metrics,
   analysisMode = "none",
+  hiddenByFile,
+  onExpandFile,
 }: {
   data: GraphPayload;
   selectedId: string | null;
@@ -153,6 +155,8 @@ export const CodeGraphCanvas = ({
   search?: string;
   metrics?: GraphMetrics;
   analysisMode?: AnalysisMode;
+  hiddenByFile?: Map<string, string[]>;
+  onExpandFile?: (fileId: string) => void;
 }) => {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const gRef = useRef<SVGGElement | null>(null);
